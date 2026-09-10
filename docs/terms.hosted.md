@@ -27,7 +27,7 @@ Use this service for your own personal receipt tracking. Do not use it to proces
 
 ## Termination
 
-[[LEGAL_ENTITY — a human must fill this in before this instance serves a hosted user — see docs/privacy-claims.md]] may suspend or terminate an account that violates acceptable use as stated above. You may stop using this service and disconnect any connected accounts (Gmail) at any time. **There is no account-deletion or per-receipt delete path in this application today, in either self-hosted or hosted mode** *(design — not yet built; see docs/privacy-claims.md)* — see [/privacy](/privacy), "Retention and deletion," for exactly what that means and what is tracked as STON-18.
+[[LEGAL_ENTITY — a human must fill this in before this instance serves a hosted user — see docs/privacy-claims.md]] may suspend or terminate an account that violates acceptable use as stated above. You may stop using this service and disconnect any connected accounts (Gmail) at any time. **There is no account-deletion or per-receipt delete path in this application today, in either self-hosted or hosted mode** *(design — not yet built; see docs/privacy-claims.md)* — see [/privacy](/privacy), "Retention and deletion," for exactly what that means, including why a safely-ordered delete existing in the codebase is not the same thing as a delete path you can use.
 
 ## Governing law
 

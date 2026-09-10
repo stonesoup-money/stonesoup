@@ -73,6 +73,22 @@
 --      data as in (a) above.
 -- See `packages/worker/src/schema.test.ts` for the reproduction against a
 -- real D1 binding.
+--
+-- **`ON DELETE RESTRICT` also means the FK graph below is child-first
+-- delete only (STON-18).** RESTRICT fires on *any* delete, not only a
+-- REPLACE-induced one — so a bare `DELETE FROM receipts` on a receipt
+-- that still has `line_items` or `receipt_sources` rows referencing it
+-- fails loudly with a bare `FOREIGN KEY constraint failed` and no hint
+-- about ordering. **That failure means the order is wrong, not that
+-- RESTRICT is wrong — reverting any RESTRICT FK below to CASCADE reopens
+-- the exact `INSERT OR REPLACE` data-loss channel review rounds 1-3
+-- closed (AGENTS.md invariant #23).** The correct order, child-first, is
+-- `review_queue` → `line_items` → `receipt_sources` → `receipts` — see
+-- `packages/worker/src/receipts/delete.ts`, which encodes it as one
+-- atomic `db.batch()` and is the primitive to call rather than issuing
+-- deletes by hand. `sources` is not part of this path: a disconnect is
+-- `UPDATE sources SET auth_state = 'disconnected'`, never a delete of the
+-- `sources` row itself.
 
 -- ---------------------------------------------------------------------
 -- sources — one row per ingestion source (a connected Gmail account, or
@@ -195,7 +211,14 @@ END;
 -- ---------------------------------------------------------------------
 CREATE TABLE receipt_sources (
   id           TEXT PRIMARY KEY,
+  -- Ordered delete: this row must be gone before its `receipts` parent is
+  -- deleted — see the migration header's "child-first delete only" note
+  -- and `packages/worker/src/receipts/delete.ts` (step 3 of 4).
   receipt_id   TEXT NOT NULL REFERENCES receipts(id) ON DELETE RESTRICT,
+  -- `sources` itself is never part of the delete path — a disconnect is
+  -- an UPDATE (see the migration header), so this FK exists purely as
+  -- the REPLACE guard the table comment above describes, not as a second
+  -- ordering step a receipt delete needs to satisfy.
   source_id    TEXT NOT NULL REFERENCES sources(id) ON DELETE RESTRICT,
   external_id  TEXT,
   ingested_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
@@ -216,6 +239,11 @@ CREATE TABLE receipt_sources (
 -- ---------------------------------------------------------------------
 CREATE TABLE line_items (
   id                     TEXT PRIMARY KEY,
+  -- Ordered delete: every `review_queue` row referencing a line item must
+  -- be gone before the line item itself is deleted, and every line item
+  -- must be gone before its `receipts` parent is deleted — see the
+  -- migration header's "child-first delete only" note and
+  -- `packages/worker/src/receipts/delete.ts` (step 2 of 4).
   receipt_id             TEXT NOT NULL REFERENCES receipts(id) ON DELETE RESTRICT,
   line_number             INTEGER,
   raw_text                TEXT NOT NULL,
@@ -277,6 +305,13 @@ END;
 -- ---------------------------------------------------------------------
 CREATE TABLE review_queue (
   id                    TEXT PRIMARY KEY,
+  -- Ordered delete: this is the first table cleared in a receipt delete —
+  -- see the migration header's "child-first delete only" note and
+  -- `packages/worker/src/receipts/delete.ts` (step 1 of 4). Deleting a
+  -- resolved row here (a real human verdict) is safe only because the
+  -- verdict already wrote its `golden_set` record immediately, in the
+  -- same step it was resolved (AGENTS.md, "the golden set is the
+  -- product"; invariant #16) — no labelling work is lost.
   line_item_id          TEXT NOT NULL REFERENCES line_items(id) ON DELETE RESTRICT,
   reason                TEXT NOT NULL
                            CHECK (reason IN ('low_confidence', 'random_audit', 'novelty', 'user_flagged', 'checksum_fail', 'bootstrap')),
