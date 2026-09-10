@@ -106,10 +106,10 @@ stubs alone.
 - **Picker arity is open, not settled.** The taxonomy has two groups
   (Food & drink, Everything else) holding 22 first-level categories
   with ~17 second-level slugs under five of them — there is no set of
-  eight anywhere in it, so keys 1–8 cannot bind to "the eight
-  first-level groups." Interim rule for implementers (STON-16): keys
-  1–8 bind to the eight most-frequently-used first-level categories
-  for that user, with a
+  eight anywhere in it, so keys 1–8 cannot bind to what an earlier
+  draft called "the eight first-level groups." Interim rule for
+  implementers (STON-16): keys 1–8 bind to the eight
+  most-frequently-used first-level categories for that user, with a
   `more` key opening the full list. This is implementable today and
   changes no slugs, but it is explicitly provisional — STON-8 must
   design for the arity to change, not treat this as resolved.
@@ -217,6 +217,10 @@ warm-startup styling.
 - **Integration tests run against real local bindings** — D1, R2, and
   Queues through `@cloudflare/vitest-plugin`.
   **Never mock the database.** A mocked binding tests the mock.
+- **Component tests ride in the same Vitest run**, using
+  `@testing-library/react` and `happy-dom` — no separate
+  component-test runner. The Playwright keyboard smoke below is the
+  one exception, kept separate because it drives a real browser.
 - **LLM calls sit behind a mockable interface.** Tests use fixture
   JSON — deterministic and free. No test makes a live model call.
 - Unit coverage: checksum validation, dedupe merge rule, routing
@@ -310,15 +314,15 @@ default — the skills are required to stop and say which one is
 missing rather than guess.
 
 - **Linear team key**: `STON` (ticket ids are `STON-<n>`).
-- **Check command**: `pnpm check` — typecheck (TypeScript, `strict:
-  true`) + lint + test (Biome for lint/format, Vitest with
+- **Check command**: `pnpm check` — typecheck (TypeScript,
+  `strict: true`) + lint + test (Biome for lint/format, Vitest with
   `@cloudflare/vitest-plugin` for tests). Must pass locally before any
   push, by an implementer, a fixer, or a human. **It does not exist
-  yet**: it lands with the
-  toolchain in STON-3, and until that merges there is nothing to
-  run — this file declares the contract, STON-3 implements it. CI must
-  run this same command rather than enumerating its own steps, so that
-  a tree passing `pnpm check` locally passes CI.
+  yet**: it lands with the toolchain in STON-3, and until that merges
+  there is nothing to run — this file declares the contract, STON-3
+  implements it. CI must run this same command rather than
+  enumerating its own steps, so that a tree passing `pnpm check`
+  locally passes CI.
 - **Base branch**: `main`.
 - **Worktrees**: `.claude/worktrees/` — one worktree per ticket, named
   for the ticket. Gitignored via `.gitignore` at the repo root.
@@ -409,10 +413,9 @@ wins.
     matching `golden_set` record in the same step; any batch, cron, or
     backfill job that populates `golden_set` after the fact.
 17. **Checksum arithmetic matches the stated formula exactly** — Data
-    conventions, #4. Trigger: any formula other than `|Σ line_items +
-    tax − stated_total| <= max(2 cents, 0.5% of stated_total)`,
-    including double-counting fees (already inside `Σ line_items`) or
-    comparing against a different tolerance.
+    conventions, #4. Trigger: any formula other than the one stated
+    there, including double-counting fees (already inside `Σ
+    line_items`) or comparing against a different tolerance.
 18. **v1 scope fence holds** — House rules, "v1 scope fence." Trigger:
     Plaid/reconciliation, active novelty routing, a visualization/chat
     agent, a native app, multi-provider auth, multi-provider LLM
@@ -430,3 +433,6 @@ wins.
     rules, the refresh-token bullet. Trigger: code that assumes a
     long-lived Gmail refresh token, or a missing one-tap reconnect
     flow.
+22. **Auth stays hand-rolled and single-provider** — Auth, bullets
+    1–2. Trigger: an auth library or SaaS, a second identity provider,
+    or a session that is not the Hono-JWT cookie.
