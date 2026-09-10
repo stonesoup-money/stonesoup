@@ -377,17 +377,29 @@ warm-startup styling.
 - **Every claim on those three pages has a row in
   `docs/privacy-claims.md`, and every rendered block has a line in
   `docs/legal-claim-ledger.md` naming that row.** A claim the table marks
-  `required` in its Marker column must carry the
+  `required` in its Marker column should carry the
   `*(design — not yet built; see docs/privacy-claims.md)*` marker in the
   prose itself, not only in the table. The rule for deciding is
   *restrictive* vs. *affirmative existence*: "only allowlisted mail is
   fetched" is true while nothing runs and needs no marker; "this instance
   sets one cookie" is false while nothing runs and always needs one. Edit
-  the prose, regenerate `docs/*.md`, and `pnpm check` will tell you
-  exactly which blocks need a decision
-  (`packages/web/src/legal-claim-coverage.test.ts`). Three review rounds
-  of spot fixes went 4 major → 3 major → 5 major before this existed;
-  do not route around it.
+  the prose, regenerate `docs/*.md`, and `pnpm check` will tell you which
+  blocks have no ledger entry at all
+  (`packages/web/src/legal-claim-coverage.test.ts`) — but that test only
+  checks the ledger's own mechanical integrity (it parses, keys are
+  unique, no stale or missing entries), not whether the row named is the
+  *right* row. Three review rounds of spot fixes went 4 major → 3 major
+  → 5 major before the ledger existed, and a fourth round showed the
+  ledger's own ceiling: a fabricated claim pointed at a real, unrelated
+  row passed every mechanical check, because no test can compare prose to
+  an implementation. **`.github/CODEOWNERS` is the actual claim-truth
+  gate** — it requires the repo owner's review of
+  `packages/core/src/legal/**` and the generated `docs/privacy*.md`,
+  `docs/terms*.md`, `docs/data-promise*.md`, `docs/privacy-claims.md`,
+  and `docs/legal-claim-ledger.md`. That line only enforces anything once
+  "Require review from Code Owners" is turned on in this repo's branch
+  protection — a GitHub setting, not something this file or any test can
+  flip.
 - The document text is conditioned on `DEPLOYMENT_MODE`
   (`"self-hosted"` | `"hosted"`, `wrangler.jsonc` var): a self-hosted
   instance needs no legal entity and no jurisdiction and says exactly

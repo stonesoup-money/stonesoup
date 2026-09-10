@@ -8,33 +8,44 @@ import {
   legalBlockExcerpt,
   legalBlockKey,
   splitLegalBlocks,
-  UNBUILT_MARKER,
 } from "@stonesoup/core";
 import { describe, expect, it } from "vitest";
 import ledgerSource from "../../../docs/legal-claim-ledger.md?raw";
-import claimsSource from "../../../docs/privacy-claims.md?raw";
 
 /**
- * The claims-coverage gate (review round 3).
+ * The claim ledger's mechanical integrity checks — demoted from a
+ * claim-truth gate to an advisory drift reminder (STON-13 final pass;
+ * decisions.md).
  *
- * Three review rounds of spot fixes on these pages went 4 major → 3
- * major → 5 major. The reviewer's diagnosis was that each round fixed
- * the untrue claims someone *named*, nobody had walked every sentence
- * against `docs/privacy-claims.md`, and the table itself had no row for
- * several of the pages' claims — so "check the table" could not close it
- * either. A table that can be silently under-populated cannot be a
- * guard.
+ * This file used to assert, in both directions, that every rendered
+ * block named a claim row in `docs/legal-claim-ledger.md` and every
+ * document-tagged row in `docs/privacy-claims.md` was named by some
+ * block — and treated that mapping as proof a claim was true. A fourth
+ * review round showed the ceiling of that approach: a fabricated claim
+ * ("all receipt images are encrypted at rest with a per-account key the
+ * operator cannot read"), appended to an existing paragraph and pointed
+ * at an unrelated real row, stayed 229/229 green. The test only ever
+ * checked that a block *names* a row — never that the row's free-text
+ * evidence actually *supports* that block's words — because no machine
+ * check can tell whether prose matches an implementation. That is a
+ * judgment call, not a fact.
  *
- * This test makes it one, by checking coverage in both directions:
- * every rendered block must name a claim row, and every row tagged with
- * a document must be named by a block. The failure that matters is the
- * first one — it fires on a *new* unbacked claim, not just on today's,
- * because a new sentence is a new block with a new key and no ledger
- * entry. The rest of the checks stop the ledger itself from rotting.
+ * The human ruling: stop pretending this file closes that loop. The
+ * real claim-truth gate is now a human one: `.github/CODEOWNERS`
+ * requires the repo owner's review on `packages/core/src/legal/**` and
+ * the generated `docs/privacy*.md`, `docs/terms*.md`,
+ * `docs/data-promise*.md`, `docs/privacy-claims.md`, and
+ * `docs/legal-claim-ledger.md`.
  *
- * It runs in the `web` Vitest project for the same reason
- * legal-docs-drift.test.ts does: Vite's `?raw` import works here, and
- * these two markdown files are the inputs.
+ * What stays here, still gating `pnpm check`, is only what a machine
+ * genuinely *can* verify about the ledger as a data structure — not
+ * about the claims it names — and is useful purely as a drift
+ * reminder: the ledger parses and its keys are unique, no ledger entry
+ * points at a block that is no longer rendered, and every rendered
+ * block has at least one ledger entry (so a new sentence cannot land
+ * with zero paper trail at all). None of that says whether the row a
+ * block points at actually backs the block's words — that gap is
+ * exactly what CODEOWNERS review exists to cover instead.
  */
 
 const hostedUnfilledContext: LegalContext = {
@@ -51,38 +62,6 @@ const RENDERINGS: readonly { label: string; slug: string; ctx: LegalContext }[] 
   { label: "docs/terms.hosted.md", slug: "terms", ctx: hostedUnfilledContext },
   { label: "docs/data-promise.hosted.md", slug: "data-promise", ctx: hostedUnfilledContext },
 ];
-
-interface ClaimRow {
-  id: string;
-  claim: string;
-  status: string;
-  marker: string;
-  /** True when the claim names one of the three documents in parentheses. */
-  isProseClaim: boolean;
-}
-
-function parseClaimRows(markdown: string): Map<string, ClaimRow> {
-  const rows = new Map<string, ClaimRow>();
-  for (const line of markdown.split("\n")) {
-    if (!line.startsWith("|")) continue;
-    const cells = line
-      .split("|")
-      .slice(1, -1)
-      .map((cell) => cell.trim());
-    if (cells.length < 5) continue;
-    const id = cells[0] ?? "";
-    if (!/^\d+$/.test(id)) continue;
-    const claim = cells[1] ?? "";
-    rows.set(`C${id}`, {
-      id: `C${id}`,
-      claim,
-      status: cells[2] ?? "",
-      marker: cells[3] ?? "",
-      isProseClaim: /\([^)]*\b(?:privacy|terms|data-promise)\b[^)]*\)/.test(claim),
-    });
-  }
-  return rows;
-}
 
 interface LedgerEntry {
   key: string;
@@ -124,38 +103,12 @@ function renderedBlocks(): Map<string, { block: LegalBlock; renderings: string[]
   return blocks;
 }
 
-/**
- * A block satisfies the unbuilt marker itself, or through the paragraph
- * its list hangs off — "…and it contains:" carrying the marker marks the
- * bullets under it, because the reader meets the marker immediately
- * above them. A list hanging straight off a heading has no such intro,
- * so each of its items must carry its own marker; that is exactly review
- * round 3's finding 4, an unmarked cookie bullet beside a correctly
- * marked Gmail bullet in the same list.
- */
-function carriesUnbuiltMarker(block: LegalBlock): boolean {
-  return (
-    block.text.includes(UNBUILT_MARKER) || (block.introText?.includes(UNBUILT_MARKER) ?? false)
-  );
-}
-
-const claimRows = parseClaimRows(claimsSource);
 const ledgerEntries = parseLedger(ledgerSource);
 const ledgerByKey = new Map(ledgerEntries.map((entry) => [entry.key, entry]));
 const blocks = renderedBlocks();
 
-describe("docs/privacy-claims.md parses as a claims table", () => {
-  it("has rows, each with a Marker column value from the controlled vocabulary", () => {
-    expect(claimRows.size).toBeGreaterThan(20);
-    for (const row of claimRows.values()) {
-      expect(
-        ["required", "placeholder", "not required"],
-        `claim row ${row.id} has Marker "${row.marker}", which is not one of required / placeholder / not required`,
-      ).toContain(row.marker);
-    }
-  });
-
-  it("the ledger parses, with no duplicate keys", () => {
+describe("docs/legal-claim-ledger.md is structurally sound", () => {
+  it("parses, with no duplicate keys", () => {
     expect(ledgerEntries.length).toBeGreaterThan(20);
     expect(ledgerByKey.size, "docs/legal-claim-ledger.md has duplicate keys").toBe(
       ledgerEntries.length,
@@ -163,12 +116,13 @@ describe("docs/privacy-claims.md parses as a claims table", () => {
   });
 });
 
-describe("every rendered block is covered by the claim ledger", () => {
-  // The load-bearing direction. A new sentence anywhere in privacy.ts,
-  // terms.ts or data-promise.ts — in either deployment mode — is a new
-  // block with a new key and no ledger entry, and fails here until
-  // someone decides, in a diff a reviewer can see, which claim row backs
-  // it.
+describe("every rendered block has a ledger entry (drift reminder, not a truth check)", () => {
+  // Coverage only: a new sentence anywhere in privacy.ts, terms.ts, or
+  // data-promise.ts — in either deployment mode — is a new block with a
+  // new key and no ledger entry, and fails here until someone adds one.
+  // Adding an entry records that *someone looked* and picked a row; it
+  // does not, and cannot, prove the row is correct — see the module
+  // comment above.
   it("no rendered block is missing from docs/legal-claim-ledger.md", () => {
     const missing: string[] = [];
     for (const [key, { block, renderings }] of blocks) {
@@ -181,8 +135,7 @@ describe("every rendered block is covered by the claim ledger", () => {
       missing,
       "these rendered blocks have no entry in docs/legal-claim-ledger.md. Paste each line into " +
         "its Ledger section and replace ?? with the docs/privacy-claims.md row(s) that back it, " +
-        "or `--` if it asserts nothing about behaviour. If it asserts that something exists and " +
-        "no row covers it, add a row — that is the whole point of this gate:\n" +
+        "or `--` if it asserts nothing about behaviour:\n" +
         missing.join("\n"),
     ).toEqual([]);
   });
@@ -195,97 +148,6 @@ describe("every rendered block is covered by the claim ledger", () => {
       stale,
       "these docs/legal-claim-ledger.md entries no longer match any rendered block — the prose " +
         "they keyed was edited or removed; delete or re-key them",
-    ).toEqual([]);
-  });
-
-  it("every ledger excerpt still matches the block it keys", () => {
-    const mismatched: string[] = [];
-    for (const entry of ledgerEntries) {
-      const found = blocks.get(entry.key);
-      if (!found) continue;
-      const expected = legalBlockExcerpt(found.block.text);
-      if (expected !== entry.excerpt) {
-        mismatched.push(`${entry.key}: ledger says "${entry.excerpt}", block reads "${expected}"`);
-      }
-    }
-    expect(mismatched, "ledger excerpts out of date").toEqual([]);
-  });
-
-  it("every claim a ledger entry names exists in docs/privacy-claims.md", () => {
-    const unknown: string[] = [];
-    for (const entry of ledgerEntries) {
-      for (const claim of entry.claims) {
-        if (!claimRows.has(claim)) unknown.push(`${entry.key} names ${claim}`);
-      }
-    }
-    expect(unknown, "ledger entries naming a nonexistent claim row").toEqual([]);
-  });
-});
-
-describe("every claim row is backed by prose, and every unbuilt claim carries its marker", () => {
-  it("no claim row tagged with a document is left unreferenced by any block", () => {
-    const referenced = new Set(ledgerEntries.flatMap((entry) => entry.claims));
-    const dead: string[] = [];
-    for (const row of claimRows.values()) {
-      if (!row.isProseClaim) continue;
-      if (!referenced.has(row.id)) dead.push(`${row.id}: ${row.claim.slice(0, 90)}`);
-    }
-    expect(
-      dead,
-      "these claim rows name a document but no rendered block references them — either the prose " +
-        "that made the claim was removed (delete the row) or the ledger is out of date",
-    ).toEqual([]);
-  });
-
-  it("every block whose row is marked `required` carries the not-yet-built marker", () => {
-    const unmarked: string[] = [];
-    for (const entry of ledgerEntries) {
-      const found = blocks.get(entry.key);
-      if (!found) continue;
-      const requiring = entry.claims.filter((claim) => claimRows.get(claim)?.marker === "required");
-      if (requiring.length === 0) continue;
-      if (!carriesUnbuiltMarker(found.block)) {
-        unmarked.push(`${entry.key} (${requiring.join(",")}): ${entry.excerpt}`);
-      }
-    }
-    expect(
-      unmarked,
-      `these blocks claim something that is not built and do not carry "${UNBUILT_MARKER}" — add ` +
-        "the marker at the point of the claim, or change the claim",
-    ).toEqual([]);
-  });
-
-  it("every block whose row is marked `placeholder` carries an unfilled-fact marker", () => {
-    const unmarked: string[] = [];
-    for (const entry of ledgerEntries) {
-      const found = blocks.get(entry.key);
-      if (!found) continue;
-      const requiring = entry.claims.filter(
-        (claim) => claimRows.get(claim)?.marker === "placeholder",
-      );
-      if (requiring.length === 0) continue;
-      if (!found.block.text.includes("[[")) {
-        unmarked.push(`${entry.key} (${requiring.join(",")}): ${entry.excerpt}`);
-      }
-    }
-    expect(
-      unmarked,
-      "these blocks state a hosted-mode fact that must render as an unfilled `[[...]]` placeholder",
-    ).toEqual([]);
-  });
-
-  it("no block marked `--` carries the marker — a claim needing a marker needs a row", () => {
-    const smuggled: string[] = [];
-    for (const entry of ledgerEntries) {
-      if (entry.claims.length > 0) continue;
-      const found = blocks.get(entry.key);
-      if (found?.block.text.includes(UNBUILT_MARKER))
-        smuggled.push(`${entry.key}: ${entry.excerpt}`);
-    }
-    expect(
-      smuggled,
-      "a block carrying the not-yet-built marker is by definition an unbuilt claim: give it a row " +
-        "in docs/privacy-claims.md instead of `--`",
     ).toEqual([]);
   });
 });

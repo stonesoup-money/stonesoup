@@ -8,35 +8,40 @@ outputs covered are `docs/{privacy,terms,data-promise}.md` and the three
 `.hosted.md` variants; a block that appears in more than one of them is
 listed once.
 
-## Why this file exists
+## What this file is, and is not (STON-13 final pass)
 
 Three adversarial review rounds on this PR found untrue claims on these
-pages — 4 major, then 3, then 5. The count went the wrong way because
-each round fixed the instances a reviewer *named*, and because
-`docs/privacy-claims.md` had no row for several of the pages' own
-normative claims, so "check the table" could not close it either. A table
-that can be silently under-populated is not a guard.
+pages — 4 major, then 3, then 5 — because each round fixed only the
+instances a reviewer *named*, and because `docs/privacy-claims.md` had
+no row for several of the pages' own normative claims, so "check the
+table" could not close it either. This file was built to invert that
+check: it enumerates every block that was actually rendered and records
+the claim row a reviewer decided answers to it.
 
-This file inverts the direction of the check. The table says "here is a
-claim, here is its evidence"; the ledger says "here is every block that
-was actually rendered, and here is the row it answers to". Together they
-close the loop in both directions, and
-`packages/web/src/legal-claim-coverage.test.ts` fails `pnpm check` when:
+A fourth round found the ceiling of that design. Recording a row against
+a block proves a human looked and made a call; it does not, and cannot,
+prove the call was right — a fabricated claim pointed at a real but
+unrelated row passed every check here, because nothing machine-checkable
+compares a block's prose to what the row's evidence actually says. That
+is a judgment call, not a fact a hash or a lookup can verify.
 
-1. a rendered block has **no entry here** — which is what happens the
-   moment anyone adds a sentence to one of these pages;
-2. an entry here names a **row that does not exist** in
-   `docs/privacy-claims.md`;
-3. a **row tagged with a document** is referenced by no block (a dead
-   row: the table describing a page that no longer says it);
-4. a block whose row is marked `required` in the table's **Marker**
-   column does not carry `*(design — not yet built; see
-   docs/privacy-claims.md)*`, or a `placeholder` row's block does not
-   carry a `[[...]]` unfilled-fact marker;
-5. an entry marked `--` (no claim: a heading, or narrative that asserts
-   nothing about behaviour) carries the marker anyway — if it needs the
-   marker it needs a row;
-6. an entry's excerpt no longer matches the block it keys.
+**This is a drift aid and a review checklist, not proof that the claims
+on these pages are true.** `packages/web/src/legal-claim-coverage.test.ts`
+still gates `pnpm check`, but only on what it can actually prove about
+this file as a data structure:
+
+1. this file parses, and its keys are unique;
+2. a rendered block has **no entry here** — which is what happens the
+   moment anyone adds a sentence to one of these pages, so it always has
+   *some* row attached before merge;
+3. an entry here names a block that **is no longer rendered** (stale —
+   the prose it keyed was edited or removed).
+
+Whether the row a block names actually backs that block's words is a
+human judgment call, checked by `.github/CODEOWNERS` requiring the repo
+owner's review of `packages/core/src/legal/**` and the generated
+`docs/privacy*.md`, `docs/terms*.md`, `docs/data-promise*.md`,
+`docs/privacy-claims.md`, and this file — not by a test.
 
 ## How to update it
 
@@ -44,9 +49,9 @@ Edit the prose, regenerate `docs/*.md` (see
 `packages/web/src/legal-docs-drift.test.ts`), then run `pnpm check`. The
 failure message prints each unledgered block as a ready-to-paste line
 with its key and excerpt; add the line, and decide — deliberately, in a
-diff a reviewer can see — which claim row it answers to. **If it asserts
-that something exists and no row covers it, the honest move is a new row
-in `docs/privacy-claims.md`, not a `--`.**
+diff the CODEOWNERS reviewer will see — which claim row it answers to.
+**If it asserts that something exists and no row covers it, the honest
+move is a new row in `docs/privacy-claims.md`, not a `--`.**
 
 The key is an 8-character FNV-1a hash of the block's normalized text
 (`packages/core/src/legal/blocks.ts`). It changes whenever the block's
@@ -59,7 +64,7 @@ against its row rather than inheriting the old one's approval.
 - `5a19928d` [C17,C61] This is a self-hosted instance of Stone Soup. There is no separate opera…
 - `128dbfca` [--] The status of this document
 - `956b5d9d` [C27,C28] Stone Soup is under construction, and this policy describes a design tha…
-- `a7f923e5` [C28] `docs/privacy-claims.md`, in the same public repository as the code, is …
+- `2b0b3be1` [C28] `docs/privacy-claims.md`, in the same public repository as the code, is …
 - `4c239f77` [--] What this app does
 - `977f90e2` [C29,C1] Stone Soup ingests your receipts — from photo upload and, once you conne…
 - `4ed676ac` [--] What is stored in this instance
@@ -81,7 +86,7 @@ against its row rather than inheriting the old one's approval.
 - `fc1270f5` [C15] Disconnecting Gmail (in the app, or by revoking access in your Google Ac…
 - `f3eb2c83` [C62] This app's use and transfer of information received from Google APIs adh…
 - `f133da0e` [--] Third parties
-- `33fa4c5d` [C8,C34] This instance is designed to send data to a fixed, small set of outside …
+- `39fa8164` [C8,C34] This instance is designed to send data to a fixed, small set of outside …
 - `04094dfd` [C35,C3] **Anthropic** — receipt images and extracted text, to run the vision ext…
 - `6a59a42e` [C36] **Cloudflare** — this instance's own hosting, database (D1), file storag…
 - `d9931ae3` [C8,C32] **Google** — solely for Gmail sync, if you connect it, per the section a…
@@ -95,9 +100,10 @@ against its row rather than inheriting the old one's approval.
 - `51d9b6f4` [C26,C15] **There is no account-deletion or per-receipt delete path in this applic…
 - `8ebc1f90` [C38] A golden-set label already contributed under "What leaves this instance"…
 - `29cef07c` [--] No operator access
-- `cfc91b49` [C13] There is no admin view or support screen, anywhere in this application, …
+- `22f90a3f` [C13] There is no admin view or support screen, anywhere in this application, …
 - `c2fe21db` [--] Security
 - `956dcd26` [C39,C3] Data in transit to and from this instance is encrypted (HTTPS). Data at …
+- `d6ae1daf` [C39,C65] Data in transit to and from this instance is encrypted (HTTPS). Data at …
 - `58f3dcc4` [--] Cookies
 - `bc4536b5` [C14,C60] This instance is designed to set exactly one cookie: a signed session to…
 - `063064ce` [C17,C63] **Contact and governing law.** A self-hosted instance has no separate le…
@@ -107,7 +113,7 @@ against its row rather than inheriting the old one's approval.
 - `5cd50d96` [C25,C45,C16] **Compute is not billed to you, and this instance does not ask you for a…
 - `63cc96d8` [C35,C25,C45,C16] **Anthropic** — receipt images and extracted text, to run the vision ext…
 - `ed1c8006` [C21,C42] The one thing this app is designed to send beyond your own instance is a…
-- `bc25c3d8` [C13,C16] There is no admin view or support screen, anywhere in this application, …
+- `783f1d40` [C13,C16] There is no admin view or support screen, anywhere in this application, …
 - `17ad8fd9` [C16] **Contact.** Questions about this policy, or to exercise a data-protecti…
 - `7467301b` [C16] **Governing law.** This policy is governed by the laws of [[GOVERNING_JU…
 - `67933d35` [C16,C63] **Effective date.** This policy takes effect on [[EFFECTIVE_DATE — a hum…
@@ -125,7 +131,7 @@ against its row rather than inheriting the old one's approval.
 - `7867f538` [C16] These terms cover the hosted Stone Soup service operated by [[LEGAL_ENTI…
 - `a72ccd8f` [--] The hosted deal
 - `fbbb02c3` [C42,C43,C21] This service is licensed by the free-tier label deal: using it at no cha…
-- `6cc34f72` [C42] On this hosted service, golden-set contribution is **not optional** — it…
+- `a561b507` [C42,C49] On this hosted service, golden-set contribution is **not optional** — it…
 - `34db2673` [--] Access limits, and what is not yet built
 - `750dc186` [C44,C45] Two limits belong to this service's committed design, and **neither of t…
 - `2e084c5b` [C44] **Invite gating.** Access may require an invite code, or be limited to a…

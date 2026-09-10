@@ -37,13 +37,13 @@ export type DeploymentMode = "self-hosted" | "hosted";
  * hand-typed near-copies (three review rounds found unmarked claims; a
  * marker nobody can typo is part of closing that).
  *
- * Rule, enforced by packages/web/src/legal-claim-coverage.test.ts: every
- * rendered block whose claim row in `docs/privacy-claims.md` carries
- * `required` in the Marker column must contain this exact string. A
- * *restrictive* claim ("only allowlisted mail is fetched") is true while
- * nothing runs and does not take the marker; an *affirmative existence*
- * claim ("this instance sets a cookie") is false while nothing runs and
- * always does.
+ * Convention, recorded in `docs/privacy-claims.md`'s Marker column and
+ * checked by a human via `.github/CODEOWNERS` review, not by a test:
+ * every rendered block whose claim row carries `required` should
+ * contain this exact string. A *restrictive* claim ("only allowlisted
+ * mail is fetched") is true while nothing runs and does not take the
+ * marker; an *affirmative existence* claim ("this instance sets a
+ * cookie") is false while nothing runs and always does.
  */
 export const UNBUILT_MARKER = "*(design — not yet built; see docs/privacy-claims.md)*";
 

@@ -35,6 +35,13 @@ import {
  * on the hosted free tier the labels *are* the payment. Hosted mode now
  * says that in its own words, and names the real alternative (run your
  * own instance), so the two-hop referral ends somewhere truthful.
+ *
+ * **Review round 4 — the self-hosted opt-out this points at is itself
+ * unbuilt.** "Where contribution can be switched off" describes the
+ * self-hosted `GOLDEN_SET_CONTRIBUTION` toggle, which — same as its
+ * three siblings in self-hosted /terms and both /data-promise renderings
+ * — no code reads yet. It now carries `UNBUILT_MARKER` at the point of
+ * the claim rather than reading as a working escape hatch.
  */
 export function termsMarkdown(ctx: LegalContext): string {
   const isHosted = ctx.mode === "hosted";
@@ -48,7 +55,7 @@ export function termsMarkdown(ctx: LegalContext): string {
 
 This service is licensed by the free-tier label deal: using it at no charge means the labeled corrections you make while reviewing your receipts — never your receipt images, account identifiers, merchant names, or purchase dates, see [/data-promise](/data-promise) — are contributed to *Open Receipts*, a labeled dataset released publicly under CC0 with a citation request. **This submission path does not exist in this codebase yet** ${UNBUILT_MARKER} — until it is built, no label is actually contributed by any path; see [/data-promise](/data-promise) for exactly what this design does and does not include. That is the free tier's payment, not money. There is currently **no paid tier** that keeps your labels private; if one is introduced later, this document will say so plainly before it exists, not after.
 
-On this hosted service, golden-set contribution is **not optional** — it is what you pay with instead of money, and there is no setting that turns it off. If you want your labels kept private, the alternative is to run your own instance of the same open-source code, where contribution can be switched off; see [/data-promise](/data-promise), "Turning contribution off". This is stated here rather than left for you to discover: it is the whole of the deal.
+On this hosted service, golden-set contribution is **not optional** — it is what you pay with instead of money, and there is no setting that turns it off. If you want your labels kept private, the alternative is to run your own instance of the same open-source code, where contribution can be switched off ${UNBUILT_MARKER}; see [/data-promise](/data-promise), "Turning contribution off". This is stated here rather than left for you to discover: it is the whole of the deal.
 
 ## Access limits, and what is not yet built
 

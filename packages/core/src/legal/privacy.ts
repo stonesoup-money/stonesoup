@@ -32,12 +32,15 @@ import {
  * nothing runs. The second kind always takes the marker.
  *
  * Every block of the rendered output — in both deployment modes — is
- * mapped to a row of docs/privacy-claims.md by
- * docs/legal-claim-ledger.md, and packages/web/src/legal-claim-coverage.test.ts
- * fails if a block exists with no row, if a row exists with no block, or
- * if a block whose row is marked `required` is missing the marker. That
- * is the mechanism that makes "check the table" actually able to close a
- * review round (review round 3).
+ * mapped to a row of docs/privacy-claims.md by docs/legal-claim-ledger.md.
+ * packages/web/src/legal-claim-coverage.test.ts keeps that mapping's
+ * mechanical facts honest (parses, keys unique, no stale or missing
+ * entries) — but a named row is not evidence the row's claim is true,
+ * only that someone pointed at it, and a fourth review round proved a
+ * fabricated claim can be pointed at a real row and stay green. Whether
+ * prose matches implementation is a human judgment call now enforced by
+ * `.github/CODEOWNERS` requiring review of this directory and the
+ * rendered docs, not by this test (STON-13 final pass; decisions.md).
  */
 export function privacyMarkdown(ctx: LegalContext): string {
   const isHosted = ctx.mode === "hosted";
@@ -75,6 +78,17 @@ export function privacyMarkdown(ctx: LegalContext): string {
     ? `${ctx.operatorName}'s own Anthropic API key, metered per account against a monthly budget (see "What is stored in this instance" above and [/terms](/terms))`
     : `whichever API key is configured for this instance (your own, in a self-hosted or BYOK deployment)`;
 
+  // Round 4 finding: this sentence used to be unconditioned and told a
+  // hosted reader about "your Anthropic key" storage, when the hosted
+  // bullet above says plainly that this instance does not ask a hosted
+  // user for a personal key at all — there is no "your key" to store on
+  // that reading. The mechanism itself (Workers Secret) is real and
+  // in use today in both modes (see packages/worker/src/env.d.ts,
+  // GET /api/byok/status); only whose key it is changes.
+  const securityKeySentence = isHosted
+    ? `This service's own Anthropic API key — not one you provide — is stored as a Workers Secret in the operator's deployment, a mechanism designed so the running application can use it without it appearing in logs, database rows, or the deployed source.`
+    : `Your Anthropic key, in a self-hosted or BYOK deployment, is stored as a Workers Secret, a mechanism designed so the running application can use it without it appearing in logs, database rows, or the deployed source.`;
+
   return `# Privacy Policy
 
 ${whoThisCovers}
@@ -83,7 +97,7 @@ ${whoThisCovers}
 
 Stone Soup is under construction, and this policy describes a design that is only partly built. **No receipt, message, or label data is collected, stored, or transmitted by this codebase today**: it contains no sign-in, no upload path, no extraction call, no Gmail sync, and no golden-set submission. Wherever a sentence below describes behaviour that does not exist yet, it carries the marker ${UNBUILT_MARKER} at the point of the claim.
 
-\`docs/privacy-claims.md\`, in the same public repository as the code, is the row-by-row status of every claim on this page: which are backed by shipped code or schema, and which are not backed by anything yet. Every block of this page is mapped to a row there by a test, so a claim cannot be added here without one.
+\`docs/privacy-claims.md\`, in the same public repository as the code, is the row-by-row status of every claim on this page: which are backed by shipped code or schema, and which are not backed by anything yet.
 
 ## What this app does
 
@@ -118,7 +132,7 @@ This app's use and transfer of information received from Google APIs adheres to 
 
 ## Third parties
 
-This instance is designed to send data to a fixed, small set of outside services, and no others ${UNBUILT_MARKER} — today the only outbound request any code here makes is the optional Anthropic key check described above, which sends no receipt, message, or label data:
+This instance is designed to send data to a fixed, small set of outside services, and no others ${UNBUILT_MARKER} — today the only outbound request any code here makes is a routine Anthropic-key-validity check (\`GET /api/byok/status\`), which sends no receipt, message, or label data:
 
 - **Anthropic** — receipt images and extracted text, to run the vision extraction call that reads your receipts. Governed by ${anthropicGovernedBy}.
 - **Cloudflare** — this instance's own hosting, database (D1), file storage (R2), and background job queue. Cloudflare is the infrastructure this app runs on, not a separate data recipient. This one is real today: this page is served by a Cloudflare Worker.
@@ -143,11 +157,11 @@ A golden-set label already contributed under "What leaves this instance" above c
 
 ## No operator access
 
-There is no admin view or support screen, anywhere in this application, through which an operator — including ${isHosted ? ctx.operatorName : "a self-hosting deployer"} — can browse another user's receipts, line items, or images. Each deployment is single-tenant: your data lives in your own database and storage, structurally separate from every other user's, not merely access-controlled.
+There is no admin view or support screen, anywhere in this application, through which an operator — including ${isHosted ? ctx.operatorName : "a self-hosting deployer"} — can browse another user's receipts, line items, or images. Each deployment is single-tenant. Your database — receipts, line items, everything extracted — is a physically separate database no other user's instance can reach. Receipt images live in shared storage partitioned per user and enforced in code.
 
 ## Security
 
-Data in transit to and from this instance is encrypted (HTTPS). Data at rest sits in Cloudflare's D1 and R2 services under this instance's own account. Your Anthropic key, in a self-hosted or BYOK deployment, is stored as a Workers Secret, a mechanism designed so the running application can use it without it appearing in logs, database rows, or the deployed source.
+Data in transit to and from this instance is encrypted (HTTPS). Data at rest sits in Cloudflare's D1 and R2 services under this instance's own account. ${securityKeySentence}
 
 ## Cookies
 

@@ -13,25 +13,34 @@ same PR** (AGENTS.md, "Public pages and the privacy policy"). A behaviour
 change that outruns this table is a review-invariant violation (AGENTS.md
 invariant #24).
 
-## How this table is kept honest (review round 3)
+## How this table is checked (review round 3, revised round 4)
 
 Three review rounds of spot fixes went 4 major → 3 major → 5 major on
 these pages, because each round fixed the untrue claims a reviewer named
 and nothing walked every sentence against this table — and because this
 table had no row at all for several of the pages' claims, so "check the
-table" could not close it either. The direction of the check is now
-inverted and mechanical:
+table" could not close it either. `docs/legal-claim-ledger.md` was built
+to invert that: it enumerates **every block** of all six rendered
+outputs (`docs/{privacy,terms,data-promise}.md` and the three
+`.hosted.md` variants) and names the row(s) below that a reviewer decided
+backs it.
 
-- `docs/legal-claim-ledger.md` enumerates **every block** of all six
-  rendered outputs (`docs/{privacy,terms,data-promise}.md` and the three
-  `.hosted.md` variants) and names the row(s) below that back it.
-- `packages/web/src/legal-claim-coverage.test.ts` fails when a rendered
-  block has no ledger entry (which is what happens the moment anyone adds
-  a claim to one of these pages), when a ledger entry names a row that
-  does not exist, when a row tagged with a document is referenced by no
-  block, and when a block whose row says `required` in the **Marker**
-  column does not carry the `*(design — not yet built; see
-  docs/privacy-claims.md)*` marker in the prose.
+A fourth round found what that mechanism cannot do: prove the row a
+block names actually supports it. A fabricated claim pointed at a real,
+unrelated row passed every check, because comparing prose to an
+implementation is a judgment call, not something a hash or a lookup can
+verify. `packages/web/src/legal-claim-coverage.test.ts` now only checks
+the ledger's own mechanical integrity as a data structure (it parses,
+keys are unique, no entry points at a block that is no longer rendered,
+every rendered block has some entry) — it is a drift reminder, not proof
+these claims are true.
+
+**The real claim-truth gate is `.github/CODEOWNERS`**, requiring the
+repo owner's review of `packages/core/src/legal/**`, this table, the
+ledger, and the generated `docs/*.md` before any change to them merges.
+That review is where "does this row's evidence actually back this
+claim?" gets asked — by a person, every time, not by a test that can be
+satisfied by pointing at *any* row.
 
 **The Marker column.** `required` means the prose must carry the marker
 at the point of the claim; `placeholder` means the prose must carry the
@@ -68,7 +77,7 @@ sentence does not repeat the marker on every item.
 | 10 | `labeler` is written and kept locally, pseudonymized at the instance boundary at submission (not at dataset export), never nulled at write. (data-promise) | Implemented (schema, local write) / NOT YET IMPLEMENTED (submission client) — STON-9 | required | `migrations/0001_initial_schema.sql` — `golden_set.labeler TEXT NOT NULL`, machine-checked in `policy-claims.test.ts`. Resolved design: decisions.md, "when is `labeler` pseudonymized?" — pseudonymization happens in the submission client, before anything leaves this instance, not in the separate `open-receipts` publication pipeline. The submission client itself does not exist in this repository (STON-9, human-gated). |
 | 11 | Golden-set contribution defaults to "on" in both self-hosted and hosted deployments. (terms, data-promise) | Implemented (the default itself) | not required | `packages/core/src/config.ts` `GOLDEN_SET_CONTRIBUTION_DEFAULT = "on"`; `wrangler.jsonc` `vars.GOLDEN_SET_CONTRIBUTION`; cross-checked in `policy-claims.test.ts`. What the default would *switch on* is row 21; what reads the value is row 49. |
 | 12 | The client-side sensitive-string filter runs before any submission leaves the device. (data-promise) | NOT YET IMPLEMENTED — STON-9 | required | The filter is planned as a local, client-side check (STON-9's GO scope); it does not exist in this repository yet. |
-| 13 | There is no admin view anywhere; no operator can read a user's data. (privacy) | Implemented (by absence) | not required | No admin route exists anywhere in `packages/worker/src` — grep-verifiable. Structural, not access-controlled: per-tenant isolation (one D1/R2 pair per deployment) makes a cross-tenant admin view architecturally impossible to add without a schema change. Guarded going forward by AGENTS.md review invariant #12. |
+| 13 | There is no admin view anywhere; no operator can read a user's data. Each deployment's database is physically separate; receipt images live in storage partitioned per user and enforced in code, not structurally separate. (privacy) | Implemented (by absence) | not required | No admin route exists anywhere in `packages/worker/src` — grep-verifiable. **D1**: one database per deployment (hosted: per-tenant; self-hosted: the operator's own) — a genuinely separate database no other user's instance can reach, not just an access-controlled table. **R2**: hosted deployments use one shared bucket with a per-user key prefix (brief, "Provisioning on signup" — "R2: one bucket, existing per-user prefix"), enforced by application code, not by storage-level tenant isolation. Per-tenant R2 buckets were considered and rejected as an upgrade path: Cloudflare accounts cap at roughly 1,000 buckets, and per-tenant buckets complicate provisioning for no isolation gain worth it at this scale. This row, and the prose it backs, describe today's design, not an aspiration — the D1/R2 distinction is stated because it is true, not glossed over because it reads as weaker. Guarded going forward by AGENTS.md review invariant #12. |
 | 14 | This instance sets exactly one cookie, a signed session token, and no tracking cookie. (privacy) | NOT YET IMPLEMENTED — STON-4 | required | Auth/session is unimplemented. Committed design: AGENTS.md, Auth section, "hand-rolled, signed JWT in a cookie." Review round 3, finding 4: the page stated this in the present tense on the document Google's reviewer reads, while `packages/worker/src/public/pages.test.ts` asserts every one of these responses carries *no* `Set-Cookie` — see row 60. |
 | 15 | Disconnecting Gmail stops sync; removing this instance's stored OAuth tokens on disconnect is part of the same unbuilt feature. (privacy) | NOT YET IMPLEMENTED — STON-4 / STON-6 | required | No disconnect flow or token-removal code exists yet. See row 24 for token *storage* itself, which is a separate, also-unbuilt piece. |
 | 16 | Hosted-mode contact, legal entity, jurisdiction, and effective date are stated, not fabricated. (privacy, terms) | Placeholder, by design | placeholder | `packages/core/src/legal/context.ts` — `DEFAULT_OPERATOR_NAME`, `DEFAULT_OPERATOR_CONTACT`, `PLACEHOLDER_JURISDICTION`, `PLACEHOLDER_EFFECTIVE_DATE` all render as an unmissable `[[...]]` marker until a human sets `OPERATOR_NAME` / `OPERATOR_CONTACT` (`wrangler.jsonc` vars) and edits the jurisdiction/effective-date placeholders directly. A self-hosted deployment never reads any of these — see row 17. `packages/worker/src/public/pages.ts`'s `warnIfHostedIdentityUnfilled()` additionally logs a server-side warning if a hosted deployment is about to serve a request with the operator identity still unfilled (review round 1, finding 4). There is no "hosted deletion mechanism" placeholder — see row 26. |
@@ -83,7 +92,7 @@ sentence does not repeat the marker on every item.
 | 25 | In hosted mode, receipt extraction runs on the operator's own Anthropic API key, not a key the user provides. (privacy) | NOT YET IMPLEMENTED — STON-5 | required | Committed design: brief, "Compute & keys (BYOK)" — "Hosted tier runs on our Anthropic key with per-user cost tracking; self-hosters BYOK." No extraction code exists. The per-account *metering* half of the old wording is row 45, which is its own unbuilt mechanism and must not ride along on this row (review round 3, finding 1). |
 | 26 | There is no account-deletion or per-receipt delete mechanism in this application today, in either self-hosted or hosted mode. (privacy, terms) | Implemented (true by absence) | not required | `migrations/0001_initial_schema.sql` — every foreign key is `ON DELETE RESTRICT`; no delete route exists anywhere in `packages/worker/src` (grep-verifiable). Tracked as STON-18. Addresses review round 1, finding 4. |
 | 27 | Nothing in this codebase collects, stores, or transmits receipt, message, or label data today: no sign-in, no upload path, no extraction call, no Gmail sync, no golden-set write, no submission. (privacy, data-promise) | Implemented (true by absence) | not required | `packages/worker/src/index.ts` routes exactly `/api/health`, `/api/byok/status`, and the three legal pages; `scheduled()` and `queue()` are empty; no `golden_set` read/write code exists (STON-13's human gate, `docs/dataset-publication.md`). Grep-verifiable, and the STON-13 gate is what keeps it so. |
-| 28 | `docs/privacy-claims.md` is the row-by-row status of every claim on these pages, and every block of the rendered pages maps to a row. (privacy, data-promise) | Implemented | not required | This file, plus `docs/legal-claim-ledger.md` and `packages/web/src/legal-claim-coverage.test.ts` — see "How this table is kept honest" above. The repository is public, so a reader of the page can actually open the file the page names. |
+| 28 | `docs/privacy-claims.md` is the row-by-row status of every claim on these pages, and every block of the rendered pages maps to a row. (privacy, data-promise) | Implemented | not required | This file, plus `docs/legal-claim-ledger.md` and `packages/web/src/legal-claim-coverage.test.ts` — see "How this table is checked" above. The repository is public, so a reader of the page can actually open the file the page names. |
 | 29 | Stone Soup ingests receipts from photo upload and Gmail, extracts line items with a vision model, and categorizes them against a fixed taxonomy. (privacy) | NOT YET IMPLEMENTED — STON-2 / STON-5 / STON-6 / STON-8 | required | None of the pipeline exists: no upload route, no extraction client, no Gmail sync, no taxonomy enumeration beyond `TAXONOMY_VERSION`. This is the page's headline description of the product and it was previously stated in the present tense with no marker anywhere near it (review round 3, the systematic pass). |
 | 30 | Receipt images are stored in this instance's R2 bucket at a path scoped to your account. (privacy) | Implemented (bucket binding) / NOT YET IMPLEMENTED (upload path) — STON-2 | required | `wrangler.jsonc` `r2_buckets` — the `RECEIPTS` binding is real; no code writes to it. |
 | 31 | Receipt and line-item records are stored in this instance's D1 database. (privacy) | Implemented (schema) / NOT YET IMPLEMENTED (write path) — STON-2 / STON-5 | required | `migrations/0001_initial_schema.sql` — `receipts` and `line_items` exist with their money CHECKs (row 2); nothing writes a row to either. |
@@ -120,6 +129,7 @@ sentence does not repeat the marker on every item.
 | 62 | This app's use and transfer of Google API data adheres to the Google API Services User Data Policy, including Limited Use. (privacy) | Statement of intent — no Google integration exists | not required | Required by Google's OAuth verification; enforced going forward by AGENTS.md invariants #3 and #4 and by rows 4, 6, 7 and 32. |
 | 63 | The "last revised" date is when this document's text was last edited. (privacy, terms, data-promise) | Implemented | not required | `packages/core/src/legal/context.ts` `LEGAL_LAST_UPDATED`, validated as an ISO date in `documents.test.ts`. Deliberately not the hosted terms' legal effective date — that is row 16's placeholder. |
 | 64 | Confirming or correcting a category writes one `golden_set` row on this instance. (data-promise) | NOT YET IMPLEMENTED — STON-9 | required | No review UI and no golden-set write path exist. The STON-13 gate forbids writing one here; the table it would write to is row 50. |
+| 65 | In hosted mode, this service's own Anthropic API key — not one the user provides — is stored as a Workers Secret in the operator's deployment. (privacy) | Implemented (the mechanism) | not required | `packages/worker/src/env.d.ts` — `ANTHROPIC_API_KEY` is a Workers Secret, no `wrangler.jsonc` `vars` entry, read by `GET /api/byok/status` (row 34) regardless of deployment mode; only whose key is configured changes. Review round 4: the Security section previously described this unconditionally as "your Anthropic key... in a self-hosted or BYOK deployment", which dangled for a hosted reader the hosted bullet (row 25) already told has no personal key to store. |
 
 ## Notes on the "NOT YET IMPLEMENTED" rows
 

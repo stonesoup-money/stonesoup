@@ -2,20 +2,24 @@
  * Block-splitting for the legal documents, and the stable key each block
  * is recorded under in `docs/legal-claim-ledger.md`.
  *
- * Why this exists (review round 3). Three review rounds each fixed the
- * untrue claims a reviewer *named*, and the count went 4 major → 3 major
- * → 5 major, because nothing walked every sentence of every rendered
- * output against `docs/privacy-claims.md`, and the claims table itself
- * had no row for several of the pages' normative claims. A table that
- * can be silently under-populated cannot be the guard. So the ledger
- * inverts the direction of the check: it enumerates every block of every
- * rendered output and requires each one to name the claim row that backs
- * it. `packages/web/src/legal-claim-coverage.test.ts` fails when a block
- * exists with no ledger entry — which is what happens the moment anyone
- * adds a new claim to one of these pages — as well as when a ledger
- * entry names a row that does not exist, when a row that belongs to a
- * document is referenced by no block, and when a block whose row is
- * marked `required` does not carry `UNBUILT_MARKER`.
+ * Why the ledger exists (review round 3). Three review rounds each fixed
+ * the untrue claims a reviewer *named*, and the count went 4 major → 3
+ * major → 5 major, because nothing walked every sentence of every
+ * rendered output against `docs/privacy-claims.md`, and the claims table
+ * itself had no row for several of the pages' normative claims. So the
+ * ledger enumerates every block of every rendered output and records the
+ * claim row someone decided backs it.
+ *
+ * What that mapping is, and is not (review round 4). Recording a row
+ * against a block proves someone looked and made a decision — it does
+ * not, and structurally cannot, prove the decision was correct. A
+ * fabricated claim pointed at an unrelated real row stayed green under
+ * the old, stricter version of `packages/web/src/legal-claim-coverage.test.ts`,
+ * because no machine check can compare prose to an implementation. That
+ * test now only guards the ledger's own mechanical integrity (parses,
+ * unique keys, no stale or missing entries); `.github/CODEOWNERS` is the
+ * actual claim-truth gate, via required human review of this directory
+ * and the generated docs.
  *
  * "Block" here means exactly what packages/core/src/legal/markdown.ts
  * renders as one element: a heading, a `-` list item, or a
