@@ -1,0 +1,42 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v4 # reads packageManager from package.json
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm check
+
+  # Branch protection requires only this job. STON-12 adds a path-filtered
+  # `evals` job (extraction-touching PRs only, plus a weekly scheduled drift
+  # run) and appends it to `needs` below — no other restructuring. A
+  # path-filtered *skipped* job cannot block a merge forever, which it
+  # would if `evals` were itself a required check instead of feeding this
+  # fan-in job.
+  ci:
+    needs: [check]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          if [ "${{ contains(needs.*.result, 'failure') }}" = true ] || \
+             [ "${{ contains(needs.*.result, 'cancelled') }}" = true ]; then exit 1; fi

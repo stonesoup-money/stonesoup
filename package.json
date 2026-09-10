@@ -1,0 +1,43 @@
+{
+  "name": "stonesoup",
+  "private": true,
+  "type": "module",
+  "license": "AGPL-3.0-only",
+  "packageManager": "pnpm@10.8.1",
+  "engines": {
+    "node": ">=22.22.2"
+  },
+  "scripts": {
+    "typecheck": "pnpm -r typecheck",
+    "lint": "biome ci .",
+    "build": "pnpm -F @stonesoup/web build",
+    "test": "pnpm build && vitest run",
+    "check:types": "node scripts/verify-types-reproducible.mjs",
+    "check:config": "node scripts/verify-config-single-source.mjs",
+    "check:no-replace": "node scripts/verify-no-replace.mjs",
+    "check:web-tests-collected": "node scripts/verify-web-tests-collected.mjs",
+    "check": "pnpm typecheck && pnpm lint && pnpm test && pnpm check:types && pnpm check:config && pnpm check:no-replace && pnpm check:web-tests-collected",
+    "format": "biome check --write .",
+    "gen:types": "wrangler types",
+    "deploy": "pnpm build && wrangler d1 migrations apply stonesoup --remote && wrangler deploy"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.5.12",
+    "@cloudflare/vitest-plugin": "1.1.6",
+    "@cloudflare/workers-types": "5.20260910.1",
+    "@testing-library/dom": "10.4.1",
+    "@testing-library/jest-dom": "7.0.1",
+    "@testing-library/react": "16.3.3",
+    "@types/node": "22.20.2",
+    "@types/react": "19.3.0",
+    "@types/react-dom": "19.3.0",
+    "@vitejs/plugin-react": "6.1.1",
+    "@vitest/runner": "4.1.11",
+    "@vitest/snapshot": "4.1.11",
+    "happy-dom": "20.14.3",
+    "typescript": "7.0.2",
+    "vite": "8.2.2",
+    "vitest": "4.1.11",
+    "wrangler": "4.130.0"
+  }
+}

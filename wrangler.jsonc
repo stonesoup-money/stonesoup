@@ -1,0 +1,60 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "stonesoup",
+  "main": "packages/worker/src/index.ts",
+  // Must be <= the installed workerd build's date or workerd refuses to
+  // start. Safely behind current — bump deliberately, not casually.
+  "compatibility_date": "2026-09-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": { "enabled": true },
+
+  "assets": {
+    "directory": "./packages/web/dist",
+    "binding": "ASSETS",
+    "not_found_handling": "single-page-application",
+    // `not_found_handling: "single-page-application"` alone would swallow
+    // /api/* into index.html and the Worker would never run. This explicit
+    // route list is what lets SPA deep links and the API coexist.
+    "run_worker_first": ["/api/*", "/mcp", "/mcp/*", "/auth/*", "/.well-known/*"]
+  },
+
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "stonesoup",
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "r2_buckets": [{ "binding": "RECEIPTS", "bucket_name": "stonesoup-receipts" }],
+  "queues": {
+    "producers": [{ "binding": "EXTRACTION_QUEUE", "queue": "stonesoup-extraction" }],
+    "consumers": [
+      {
+        "queue": "stonesoup-extraction",
+        "max_batch_size": 1,
+        "max_retries": 3,
+        "dead_letter_queue": "stonesoup-extraction-dlq"
+      }
+    ]
+  },
+  // Declared for STON-7's embedding backfill; nothing calls it in v1. Local
+  // Workers AI calls proxy to the real Cloudflare API and need credentials,
+  // so no test on the default `pnpm test` path may invoke env.AI.
+  "ai": { "binding": "AI" },
+  "triggers": { "crons": ["*/15 * * * *"] },
+
+  // NOVELTY_THRESHOLD is deliberately absent — lever 3 (novelty routing) is
+  // phase 2 and the line_items.embedding column ships unpopulated.
+  "vars": {
+    "ANTHROPIC_MODEL": "claude-opus-5",
+    "TAXONOMY_VERSION": "0.1.0",
+    "BACKFILL_WINDOW_DAYS": "90",
+    "SAMPLING_RATE": "1.0",
+    "CONFIDENCE_FLOOR": "0.85",
+    "DAILY_REVIEW_CAP": "200",
+    "REVIEW_QUEUE_CAP": "100",
+    "REVIEW_QUEUE_REFILL_AT": "20",
+    "GOLDEN_SET_CONTRIBUTION": "on"
+  }
+}
