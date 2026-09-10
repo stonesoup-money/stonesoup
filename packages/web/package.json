@@ -9,6 +9,7 @@
     "build": "vite build"
   },
   "dependencies": {
+    "@radix-ui/react-dialog": "1.1.16",
     "@stonesoup/core": "workspace:*",
     "react": "19.3.0",
     "react-dom": "19.3.0"

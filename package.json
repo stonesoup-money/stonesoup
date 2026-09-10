@@ -17,7 +17,8 @@
     "check:no-replace": "node scripts/verify-no-replace.mjs",
     "check:web-tests-collected": "node scripts/verify-web-tests-collected.mjs",
     "check:public-routes": "node scripts/verify-public-routes.mjs",
-    "check": "pnpm typecheck && pnpm lint && pnpm test && pnpm check:types && pnpm check:config && pnpm check:no-replace && pnpm check:web-tests-collected && pnpm check:public-routes",
+    "check:design-tokens": "node scripts/verify-design-tokens.mjs",
+    "check": "pnpm typecheck && pnpm lint && pnpm test && pnpm check:types && pnpm check:config && pnpm check:no-replace && pnpm check:web-tests-collected && pnpm check:public-routes && pnpm check:design-tokens",
     "format": "biome check --write .",
     "gen:types": "wrangler types",
     "deploy": "pnpm build && wrangler d1 migrations apply stonesoup --remote && wrangler deploy"
