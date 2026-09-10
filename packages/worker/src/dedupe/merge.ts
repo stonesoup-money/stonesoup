@@ -139,12 +139,27 @@ export interface LinkOrMergeInput {
 
 export interface LinkOrMergeResult {
   /** The receipt id line items should be written against — the survivor's
-   * id when a merge happened, otherwise `receiptId` unchanged. */
+   * id when a merge happened, otherwise `receiptId` unchanged —
+   * **except** when `refusedReason` is
+   * `"external-id-bound-to-other-receipt"` (STON-19): `finalReceiptId`
+   * there is `input.receiptId`, a receipt this call deliberately left
+   * with zero `receipt_sources` rows, and committing line items to it
+   * strands it exactly as permanently as the case this ticket fixes (it
+   * can never become a merge duplicate once it holds line items, and it
+   * can never be a merge candidate with no source link either). Always
+   * check `lineItemsAlreadyPresent` before writing — it is forced `true`
+   * on that path for exactly this reason — do not gate the write on
+   * `finalReceiptId` alone. */
   finalReceiptId: string;
   merged: boolean;
-  /** `true` when `finalReceiptId` already has committed line items — the
-   * caller must NOT write the incoming extraction's line items in that
-   * case (they were only ever in memory; nothing committed is discarded). */
+  /** `true` when the caller must NOT write the incoming extraction's line
+   * items to `finalReceiptId`. Set when `finalReceiptId` already has
+   * committed line items (they were only ever in memory; nothing
+   * committed is discarded) — **or** forced `true` on the
+   * `"external-id-bound-to-other-receipt"` refusal (STON-19) even though
+   * `finalReceiptId` has no committed items yet: writing there would
+   * strand it just as permanently. Treat this flag as "do not write
+   * here", not as a literal item count. */
   lineItemsAlreadyPresent: boolean;
   /** Populated (non-null) when the candidate query found two or more
    * matches — ambiguous, so no merge happened and every candidate
@@ -287,7 +302,16 @@ export async function linkOrMerge(
       return {
         finalReceiptId: input.receiptId,
         merged: false,
-        lineItemsAlreadyPresent: (await lineItemCount(db, input.receiptId)) > 0,
+        // Forced true (review round 2, finding 1) — not a literal item
+        // count. input.receiptId has zero receipt_sources rows on this
+        // path (that is the whole refusal), so a caller that writes line
+        // items here anyway strands it just as permanently as the
+        // duplicate-has-line-items case: it can never be a merge
+        // duplicate once it holds committed items, and it can never be a
+        // merge candidate with no source link. This flag is the
+        // documented "do not write" signal on every path — see
+        // LinkOrMergeResult.lineItemsAlreadyPresent and .finalReceiptId.
+        lineItemsAlreadyPresent: true,
         ambiguousMatchCount: null,
         refusedReason: "external-id-bound-to-other-receipt",
         externalIdBoundTo: existingLink.receipt_id,
@@ -296,7 +320,19 @@ export async function linkOrMerge(
   }
 
   const noMerge = async (
-    extra: Partial<Pick<LinkOrMergeResult, "ambiguousMatchCount" | "refusedReason">> = {},
+    // `refusedReason` is narrowed to exclude "external-id-bound-to-other-
+    // receipt" (review round 2, finding 2): the plan is explicit that
+    // this refusal must never route through noMerge(), because noMerge()'s
+    // whole job is to write the source link — the exact write being
+    // refused. This makes that a type error, not just a prose rule; the
+    // guard above returns its own result literal instead.
+    extra: Partial<{
+      ambiguousMatchCount: LinkOrMergeResult["ambiguousMatchCount"];
+      refusedReason: Exclude<
+        LinkOrMergeResult["refusedReason"],
+        "external-id-bound-to-other-receipt"
+      >;
+    }> = {},
   ): Promise<LinkOrMergeResult> => {
     await ensureSourceLinkStatement(db, {
       receiptId: input.receiptId,
