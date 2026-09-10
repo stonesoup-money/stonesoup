@@ -46,13 +46,18 @@
  * is deleted second. The reverse would leave a `receipts` row pointing at
  * a missing image if the D1 batch then failed. This order's own failure
  * mode is the opposite and more recoverable one: the D1 batch commits but
- * the R2 delete fails, leaving an orphaned R2 object. That failure is
- * never swallowed here — `deleteReceipt` does not wrap the R2 delete in a
- * `try` that reports success regardless, so a failed R2 delete rejects the
- * returned promise instead of silently lying that the image is gone. The
- * key convention stays `{userId}/{yyyy}/{mm}/{receiptUuid}` (AGENTS.md,
- * Data conventions #6); this primitive uses `receipts.r2_key` exactly as
- * stored rather than recomputing it.
+ * the R2 delete fails, leaving an orphaned R2 object — and by then the
+ * `receipts` row that held `r2_key` is gone, so that key is the only
+ * remaining way to find the object again. `deleteReceipt` captures it
+ * before the batch runs (the initial `SELECT`, not a recompute) and hands
+ * it back on the result regardless of the R2 outcome. A failed R2 delete
+ * is never swallowed into a false success: `deleteReceipt` catches the
+ * rejection, reports `r2Deleted: false` with `r2Key` still populated so a
+ * caller can retry against the same key, and surfaces the underlying
+ * error on `r2Error` rather than letting it disappear. The key convention
+ * stays `{userId}/{yyyy}/{mm}/{receiptUuid}` (AGENTS.md, Data conventions
+ * #6); this primitive uses `receipts.r2_key` exactly as stored rather
+ * than recomputing it.
  *
  * **No caller exists yet, and this is deliberate, not an oversight —
  * following STON-11's `linkOrMerge` precedent.** There is no session, no
@@ -98,10 +103,20 @@ export interface DeleteReceiptResult {
    * email-only receipt). Still populated even when `r2Deleted` is `false`
    * so a caller can retry the R2 delete against the same key. */
   r2Key: string | null;
-  /** `true` only when an R2 object actually existed at `r2Key` and the
-   * delete call for it completed. `false` when `r2Key` was `null` — there
-   * was nothing to delete, not a failure. */
+  /** `true` when the delete call for `r2Key` completed without rejecting.
+   * R2's `delete()` resolves even when no object exists at the key, so
+   * this does not mean an object was actually removed — only that the
+   * call finished. `false` when `r2Key` was `null` (nothing to delete,
+   * not a failure) or when the delete call rejected — see `r2Error`; in
+   * that case `r2Key` stays populated so a caller can retry. */
   r2Deleted: boolean;
+  /** The rejection's message when the R2 delete call for `r2Key` failed
+   * (transient R2 error, throttle, network). `null` otherwise, including
+   * the `r2Key === null` case. By the time this can happen the D1 batch
+   * has already committed and the `receipts` row that stored `r2Key` is
+   * gone, so `r2Key` on this same result is the only remaining way to
+   * retry. */
+  r2Error: string | null;
 }
 
 interface ReceiptRow {
@@ -136,6 +151,7 @@ export async function deleteReceipt(
       sourceLinksDeleted: 0,
       r2Key: null,
       r2Deleted: false,
+      r2Error: null,
     };
   }
 
@@ -146,11 +162,12 @@ export async function deleteReceipt(
   // not the reverse, is deliberate.
   const batchResults = await db.batch(deleteReceiptStatements(db, receiptId));
   const [reviewQueueResult, lineItemsResult, sourceLinksResult] = batchResults;
-  if (!reviewQueueResult || !lineItemsResult || !sourceLinksResult) {
+  if (batchResults.length !== 4 || !reviewQueueResult || !lineItemsResult || !sourceLinksResult) {
     // db.batch() is documented to return one result per statement, in
     // order — this would mean the D1 binding violated that contract.
-    // noUncheckedIndexedAccess requires this check; it is not expected to
-    // ever actually throw.
+    // noUncheckedIndexedAccess requires the per-element checks; the
+    // length check is what actually makes the message's "expected 4"
+    // true of the condition. Not expected to ever actually throw.
     throw new Error(
       `deleteReceipt: db.batch() returned ${batchResults.length} results for receipt ${receiptId}, expected 4`,
     );
@@ -158,13 +175,25 @@ export async function deleteReceipt(
 
   const r2Key = row.r2_key;
   let r2Deleted = false;
+  let r2Error: string | null = null;
   if (r2Key !== null) {
-    // Deliberately not wrapped in a try/catch that would report success
-    // regardless — see the module doc's "R2 ordering" paragraph. A
-    // failure here rejects this promise (the D1 side has already
-    // committed) rather than silently lying that the image is gone.
-    await r2.delete(r2Key);
-    r2Deleted = true;
+    // The D1 batch has already committed, so `r2Key` — captured above,
+    // before the batch ran — is the only remaining way to find this
+    // object again. A rejection here must not throw: it is caught and
+    // reported as `r2Deleted: false` with `r2Key` still on the result,
+    // never swallowed into a false success. See the module doc's "R2
+    // ordering" paragraph.
+    try {
+      await r2.delete(r2Key);
+      r2Deleted = true;
+    } catch (err) {
+      r2Deleted = false;
+      r2Error = err instanceof Error ? err.message : String(err);
+      console.error(
+        `deleteReceipt: R2 delete failed for key ${r2Key} (receipt ${receiptId} already removed from D1)`,
+        err,
+      );
+    }
   }
 
   return {
@@ -174,5 +203,6 @@ export async function deleteReceipt(
     sourceLinksDeleted: sourceLinksResult.meta.changes,
     r2Key,
     r2Deleted,
+    r2Error,
   };
 }

@@ -236,21 +236,36 @@ describe("R2", () => {
 });
 
 describe("ordering is load-bearing (the ticket's actual regression guard)", () => {
-  it("rejects when the four statements run reversed through db.batch, and leaves the whole graph intact", async () => {
+  it("rolls back a receipt_sources delete that already succeeded, once a later statement in the same batch hits RESTRICT", async () => {
     const statements = deleteReceiptStatements(DB, fixture.receiptId);
-    const reversed = [...statements].reverse();
+    const [reviewQueueStmt, lineItemsStmt, receiptSourcesStmt, receiptsStmt] = statements as [
+      D1PreparedStatement,
+      D1PreparedStatement,
+      D1PreparedStatement,
+      D1PreparedStatement,
+    ];
 
-    // Reversed: receipts first, which still has line_items and
-    // receipt_sources referencing it — ON DELETE RESTRICT must still fire
-    // here exactly as it does for a bare DELETE FROM receipts, and
-    // db.batch must roll the whole partial attempt back atomically.
-    await expect(DB.batch(reversed)).rejects.toThrow();
+    // receipt_sources has nothing referencing it, so deleting it first
+    // succeeds on its own — but receipts (next) still has line_items
+    // pointing at it, because line_items is pushed to third in this
+    // order. ON DELETE RESTRICT fires there, and db.batch must then roll
+    // back the receipt_sources delete that already succeeded, not just
+    // leave it never-attempted the way a full reversal would (that case,
+    // where nothing ever runs, is "the naive path still fails loudly"
+    // below — it does not exercise rollback of a partial success).
+    const reordered = [receiptSourcesStmt, receiptsStmt, lineItemsStmt, reviewQueueStmt];
+
+    await expect(DB.batch(reordered)).rejects.toThrow();
 
     const receiptRow = await DB.prepare(`SELECT id FROM receipts WHERE id = ?`)
       .bind(fixture.receiptId)
       .first();
     expect(receiptRow).not.toBeNull();
     expect(await countWhere("line_items", "receipt_id", fixture.receiptId)).toBe(2);
+    // The load-bearing assertion: receipt_sources' delete ran and
+    // succeeded within this batch (it has no RESTRICT of its own), so
+    // this count is only back to 2 because db.batch rolled the whole
+    // partial attempt back atomically when receipts hit RESTRICT next.
     expect(await countWhere("receipt_sources", "receipt_id", fixture.receiptId)).toBe(2);
     expect(await countWhere("review_queue", "line_item_id", fixture.lineItemId1)).toBe(1);
     expect(await countWhere("review_queue", "line_item_id", fixture.lineItemId2)).toBe(1);
@@ -284,6 +299,7 @@ describe("idempotence", () => {
       sourceLinksDeleted: 0,
       r2Key: null,
       r2Deleted: false,
+      r2Error: null,
     });
 
     // The fixture's own graph is untouched by a delete of an unrelated id.
