@@ -1,0 +1,14 @@
+packages:
+  - "packages/*"
+
+# pnpm 10 blocks dependency postinstall/build scripts by default. workerd and
+# esbuild both run a postinstall that downloads their native binary, and
+# sharp (a miniflare dependency) has a native build step. Without declaring
+# them here, `pnpm install` either warns and leaves a non-functional workerd
+# or hard-fails with ERR_PNPM_IGNORED_BUILDS. This is the single most likely
+# cause of a red first CI run — see AGENTS.md / STON-16.
+onlyBuiltDependencies:
+  - workerd
+  - esbuild
+  - sharp
+  - "@biomejs/biome"

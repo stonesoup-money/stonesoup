@@ -1,0 +1,6 @@
+# Copy to .dev.vars for local development (gitignored). The Deploy to
+# Cloudflare button prompts for this as a Worker secret at deploy time.
+
+# Anthropic API key used for receipt extraction. Yours; we never see it.
+# https://console.anthropic.com/settings/keys
+ANTHROPIC_API_KEY=""
