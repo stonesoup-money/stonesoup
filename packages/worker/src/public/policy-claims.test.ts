@@ -73,7 +73,7 @@ describe("golden_set schema matches the anonymization claims in /data-promise", 
     }
   });
 
-  it("labeler is NOT NULL — kept at write time, not nulled (pseudonymized only at export)", async () => {
+  it("labeler is NOT NULL — kept at write time, not nulled (pseudonymized at the instance boundary on submission, not at export)", async () => {
     const { results } = await env.DB.prepare("PRAGMA table_info(golden_set)").all<{
       name: string;
       notnull: number;
@@ -163,6 +163,84 @@ describe("the golden-set submission payload allowlist is exhaustive (review roun
     );
     expect(GOLDEN_SET_SUBMISSION_ALLOWLIST).not.toContain("created_at");
     expect(GOLDEN_SET_SUBMISSION_PSEUDONYMIZED_COLUMNS).not.toContain("created_at");
+  });
+});
+
+describe('the rendered "It contains exactly:" list is bound to GOLDEN_SET_SUBMISSION_ALLOWLIST (review round 2, finding 3)', () => {
+  // Finding 3, demonstrated by the reviewer: the exhaustiveness tests above
+  // only prove every real golden_set column is *categorized* somewhere.
+  // They said nothing about whether the allowlist actually matches what
+  // /data-promise's prose claims leaves the instance — the reviewer added
+  // a `reviewer_note` column, listed it in GOLDEN_SET_SUBMISSION_ALLOWLIST,
+  // and every test above (and the full 182-test suite) stayed green with
+  // the page's "It contains exactly:" list never mentioning it. This test
+  // reads the live rendered markdown, pulls the backtick-quoted column
+  // identifiers out of that exact bullet list, and asserts the two are
+  // identical, in order — so a column added to the allowlist without a
+  // matching bullet (or a bullet edited without a matching allowlist
+  // entry) fails here instead of riding along silently.
+  //
+  // The pseudonym bullet (`labeler`) is deliberately excluded: it names a
+  // column whose real value is substituted away, not one whose value is
+  // copied into the payload as-is, so it is not a member of
+  // GOLDEN_SET_SUBMISSION_ALLOWLIST and would break a naive backtick scrape
+  // that didn't account for it. Detecting it by the word "pseudonym"
+  // rather than by name keeps this test from silently passing if `labeler`
+  // ever got copied into the allowlist by mistake — that line always
+  // mentions "pseudonym", the allowlist line beside it never does.
+  it('extracts the exact backtick-quoted field list from data-promise.ts\'s "It contains exactly:" bullets', () => {
+    const markdown = getLegalDocument("data-promise")?.markdown(DEFAULT_LEGAL_CONTEXT) ?? "";
+    const lines = markdown.split("\n");
+
+    const introIndex = lines.findIndex((line) => line.includes("It contains exactly:"));
+    expect(
+      introIndex,
+      'could not find the "It contains exactly:" intro line in data-promise.ts',
+    ).toBeGreaterThan(-1);
+
+    const listLines: string[] = [];
+    for (let i = introIndex + 1; i < lines.length; i++) {
+      const line = lines[i] ?? "";
+      if (line.startsWith("- ")) {
+        listLines.push(line);
+        continue;
+      }
+      if (line.trim() === "" && listLines.length === 0) {
+        continue;
+      }
+      break;
+    }
+    expect(
+      listLines.length,
+      'found no bullet list immediately after "It contains exactly:"',
+    ).toBeGreaterThan(0);
+
+    const extractedFields: string[] = [];
+    for (const line of listLines) {
+      if (/pseudonym/i.test(line)) {
+        // The `labeler` substitution bullet — not an allowlist member.
+        continue;
+      }
+      for (const match of line.matchAll(/`([a-zA-Z0-9_]+)`/g)) {
+        extractedFields.push(match[1] ?? "");
+      }
+    }
+
+    expect(
+      extractedFields,
+      'the fields named in data-promise.ts\'s "It contains exactly:" list no longer match ' +
+        "GOLDEN_SET_SUBMISSION_ALLOWLIST in packages/core/src/legal/submission-fields.ts — update " +
+        "both together",
+    ).toEqual(GOLDEN_SET_SUBMISSION_ALLOWLIST);
+  });
+
+  it("the pseudonym bullet still names labeler and is excluded from the allowlist comparison above by content, not by hardcoding", () => {
+    const markdown = getLegalDocument("data-promise")?.markdown(DEFAULT_LEGAL_CONTEXT) ?? "";
+    const lines = markdown.split("\n");
+    const pseudonymLine = lines.find((line) => /pseudonym/i.test(line) && line.startsWith("- "));
+    expect(pseudonymLine).toBeDefined();
+    expect(pseudonymLine).toContain("`labeler`");
+    expect(GOLDEN_SET_SUBMISSION_ALLOWLIST).not.toContain("labeler");
   });
 });
 

@@ -113,4 +113,24 @@ describe("renderMarkdown: supported subset", () => {
     const html = renderMarkdown("- first\n- second");
     expect(html).toBe("<ul><li>first</li><li>second</li></ul>");
   });
+
+  it("renders *emphasis* as <em> (review round 2, finding 4)", () => {
+    const html = renderMarkdown("This is *emphasized*.");
+    expect(html).toBe("<p>This is <em>emphasized</em>.</p>");
+  });
+
+  it("renders a bold span and a separate emphasis span in the same line without cross-matching", () => {
+    const html = renderMarkdown("**bold** and *italic* together.");
+    expect(html).toBe("<p><strong>bold</strong> and <em>italic</em> together.</p>");
+  });
+
+  it("renders the exact 'design — not yet built' marker this PR's own convention uses", () => {
+    const html = renderMarkdown(
+      "Some claim. *(design — not yet built; see docs/privacy-claims.md)*",
+    );
+    expect(html).toBe(
+      "<p>Some claim. <em>(design — not yet built; see docs/privacy-claims.md)</em></p>",
+    );
+    expect(html).not.toContain("*");
+  });
 });

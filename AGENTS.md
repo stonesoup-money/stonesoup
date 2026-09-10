@@ -378,8 +378,8 @@ warm-startup styling.
   (`"self-hosted"` | `"hosted"`, `wrangler.jsonc` var): a self-hosted
   instance needs no legal entity and no jurisdiction and says exactly
   that; the hosted fleet's `OPERATOR_NAME` / `OPERATOR_CONTACT` vars,
-  plus the inline jurisdiction/effective-date/deletion-mechanism
-  placeholders in `packages/core/src/legal/context.ts`, must never be
+  plus the inline jurisdiction/effective-date placeholders in
+  `packages/core/src/legal/context.ts`, must never be
   filled in with an invented value — an agent inventing a legal entity
   name or jurisdiction is fabricating a legal document. Leave the
   `[[...]]` placeholder in place; a human fills it in.
@@ -549,8 +549,8 @@ wins.
     without a matching update to `packages/core/src/legal/privacy.ts` /
     `terms.ts` / `data-promise.ts` and `docs/privacy-claims.md` in the
     same PR; a hosted-mode legal placeholder (`OPERATOR_NAME`,
-    `OPERATOR_CONTACT`, jurisdiction, effective date, deletion mechanism
-    in `packages/core/src/legal/context.ts`) filled in with an invented
+    `OPERATOR_CONTACT`, jurisdiction, or effective date, in
+    `packages/core/src/legal/context.ts`) filled in with an invented
     value instead of left as `[[...]]`; `/privacy`, `/terms`, or
     `/data-promise` moved behind auth or dropped from `wrangler.jsonc`'s
     `assets.run_worker_first`.

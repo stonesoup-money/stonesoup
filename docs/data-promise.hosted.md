@@ -4,7 +4,7 @@ Stone Soup's whole reason to exist is a high-quality, honestly-collected labeled
 
 ## The local record
 
-When you review a line item and confirm or correct its category, this instance writes one row to its own `golden_set` table. That row is local — it is this instance's own review history and quality-control record, not the submission payload described below — and it contains:
+When you review a line item and confirm or correct its category, this instance writes one row to its own `golden_set` table *(design — not yet built; see docs/privacy-claims.md)*. That row is local — it is this instance's own review history and quality-control record, not the submission payload described below — and it contains:
 
 - **The raw line text**, exactly as printed on the receipt or in the order confirmation.
 - **Merchant type** — a category like "grocery" or "pharmacy", not the merchant's name.
@@ -26,11 +26,11 @@ Email bodies are handled the same way at the point they are parsed for receipt d
 
 If golden-set contribution is enabled, this instance's *submission client* prepares a separate payload from the local record above before anything is sent to Stone Soup's central submission service (see [/privacy](/privacy), "Third parties"). That payload is an explicit **allowlist** — only the fields named below are ever included, built field by field, never a raw copy of the local row. It contains exactly:
 
-- The raw line text.
-- Merchant type.
-- The model's guess (category, subcategory, confidence).
-- Your verdict, and the corrected category and subcategory if you changed them.
-- The routing reason.
+- The raw line text (`raw_string`).
+- Merchant type (`merchant_type`).
+- The model's guess: category (`model_category`), subcategory (`model_subcategory`), and confidence (`model_confidence`).
+- Your verdict (`verdict`), and the corrected category (`corrected_category`) and subcategory (`corrected_subcategory`) if you changed them.
+- The routing reason (`routing_reason`).
 - `taxonomy_version` and `schema_version`.
 - `split`.
 - A **per-instance pseudonym**, substituted for the real `labeler` before the payload is built. The real value never leaves this instance — see "The two boundaries" below.
@@ -45,7 +45,7 @@ The raw line text is submitted **exactly as printed** — that is the entire poi
 
 ## The client-side filter
 
-Before any label leaves your device, a filter runs **on your machine**, not on a server: it drops line items that match pharmacy-style patterns (prescription medication names, dosage strings) and anything that looks like a person's name, so those never leave in the first place. This filter is best-effort pattern matching, not a guarantee — it is the densest, most heavily tested piece of logic in this codebase precisely because it is the last line of defense before data leaves your control. If you believe a line slipped through that should not have, report it (see this instance's contact details in [/privacy](/privacy)) so the filter's pattern table can be extended; the fix applies going forward, but see "Publication" below for what that means for anything already released.
+Before any label leaves your device, a filter is designed to run **on your machine**, not on a server: it would drop line items that match pharmacy-style patterns (prescription medication names, dosage strings) and anything that looks like a person's name, so those never leave in the first place *(design — not yet built; see docs/privacy-claims.md)*. **This filter does not exist in this codebase yet** — it is planned as best-effort pattern matching, not a guarantee, once it is built. Until then nothing described in this section has actually screened a submitted label, because the submission client it would run inside does not exist either (see "What actually leaves your machine" above). Once it exists, if you believe a line slipped through that should not have, you will be able to report it (see this instance's contact details in [/privacy](/privacy)) so the filter's pattern table can be extended; the fix would apply going forward, but see "Publication" below for what that means for anything already released.
 
 ## The two boundaries — and why they are different
 

@@ -100,6 +100,44 @@ describe("public legal pages: content and safety headers", () => {
   });
 });
 
+describe("rendered public pages carry no literal markdown syntax (review round 2, finding 4)", () => {
+  // Round 1, finding 7 fixed backticks and `---` leaking onto the live
+  // pages, but round 1 never added a negative test proving the *class* of
+  // bug was closed — only that those two specific characters were now
+  // handled. Round 2 found the same class regressed through a third
+  // character (single-asterisk emphasis, used by this PR's own "design —
+  // not yet built" marker and asides like `*Open Receipts*`). This test
+  // is the negative assertion that should have existed the first time:
+  // it inspects the actual bytes a browser receives, not the renderer's
+  // unit tests, so any future markdown syntax the renderer doesn't
+  // understand yet (underscores, `#` inside a word, whatever comes next)
+  // fails `pnpm check` here instead of shipping to the open internet.
+  it.each(PUBLIC_ROUTE_PATHS)(
+    "%s renders no unconverted markdown control characters",
+    async (path) => {
+      const response = await SELF.fetch(`https://example.com${path}`);
+      const body = await response.text();
+      // Strip real HTML tags first — a rendered `<a href="...">`,
+      // `<strong>`, `<em>`, or `<code>` legitimately contains `<`, `>`, and
+      // quotes; the check below is about markdown *syntax characters*
+      // surviving as literal text between the tags, not about markup.
+      const textOnly = body.replace(/<[^>]*>/g, "");
+
+      expect(textOnly, "literal backtick found in rendered text").not.toContain("`");
+      expect(textOnly, "literal ** found in rendered text (unconverted bold)").not.toContain("**");
+      expect(textOnly, "literal * found in rendered text (unconverted emphasis)").not.toContain(
+        "*",
+      );
+      expect(textOnly, "literal markdown link syntax found in rendered text").not.toMatch(
+        /\]\([^)]*\)/,
+      );
+      expect(textOnly, "a standalone --- thematic-break line survived unrendered").not.toMatch(
+        /^\s*-{3,}\s*$/m,
+      );
+    },
+  );
+});
+
 describe("warnIfHostedIdentityUnfilled (review round 1, finding 4)", () => {
   // hasPlaceholderOperatorIdentity() existed in context.ts but was never
   // called anywhere in the repo before this fix. This proves the call

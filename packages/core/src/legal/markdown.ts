@@ -1,8 +1,8 @@
 /**
  * A deliberately tiny Markdown subset renderer for the legal documents:
  * `#`/`##`/`###` headings, blank-line-separated paragraphs, `-` list
- * items, `**bold**`, `` `code` ``, `---` thematic breaks, and
- * `[text](url)` links. Nothing else. Every piece of source text is
+ * items, `**bold**`, `*emphasis*`, `` `code` ``, `---` thematic breaks,
+ * and `[text](url)` links. Nothing else. Every piece of source text is
  * HTML-escaped before any markdown syntax is applied, so a raw string
  * containing `<`, `>`, `&`, `"` or `'` can never produce a tag, attribute
  * break-out, or entity of its own — this is the only thing standing
@@ -17,6 +17,18 @@
  * section divider, and until this renderer understood either, those
  * rendered as literal punctuation on the live public pages instead of
  * `<code>` and `<hr>` — the exact page Google's OAuth reviewer opens.
+ *
+ * Single-asterisk emphasis (review round 2, finding 4): the same bug came
+ * back through a different character. This PR's own "design — not yet
+ * built" markers (privacy.ts's documented convention) and asides like
+ * `*Open Receipts*` are written as single-asterisk `*emphasis*`, which
+ * this renderer had no rule for, so they rendered as literal asterisks
+ * around the text instead of `<em>...</em>`. `markdown.test.ts` now
+ * covers this case, and `pages.test.ts` asserts the live rendered bytes
+ * of all three public pages carry no unconverted markdown syntax at
+ * all — the negative test round 1's fix should have had, which is why
+ * this regressed silently through a different character instead of
+ * being caught the first time.
  */
 
 function escapeHtml(text: string): string {
@@ -54,6 +66,10 @@ function renderInline(escaped: string): string {
     return `${CODE_SPAN_MARKER}${index}${CODE_SPAN_MARKER}`;
   });
   out = out.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
+  // Single-asterisk emphasis, applied after bold so a `**bold**` span's
+  // own asterisks are already consumed into <strong> tags and cannot be
+  // mistaken for a pair of emphasis markers (review round 2, finding 4).
+  out = out.replace(/\*(.+?)\*/g, "<em>$1</em>");
   out = out.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2">$1</a>');
   const markerPattern = new RegExp(`${CODE_SPAN_MARKER}(\\d+)${CODE_SPAN_MARKER}`, "g");
   out = out.replace(markerPattern, (_match, index: string) => {
