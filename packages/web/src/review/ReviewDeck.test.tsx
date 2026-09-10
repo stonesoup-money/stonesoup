@@ -64,6 +64,54 @@ describe("ReviewDeck", () => {
     expect(body.verdict).toBe("confirmed");
   });
 
+  it("a second Y within the advance animation window does not double-submit the same queueId (round 2, finding 6)", async () => {
+    const fetchMock = mockFetchSequence([ITEM_A, ITEM_B]);
+    render(<ReviewDeck />);
+    await waitFor(() => expect(screen.getByText("RAW LINE A")).toBeInTheDocument());
+
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "y" }));
+    // Well inside the 160ms advance animation, but after React has
+    // committed `submitting: true` — this is exactly the window round 1's
+    // guard claimed to close and didn't: `submitting` used to clear the
+    // moment the network response came back, well before `current` (and
+    // so the queueId a second `Y` would submit against) actually changed.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "y" }));
+
+    await waitFor(() => expect(screen.getByText("RAW LINE B")).toBeInTheDocument(), {
+      timeout: 1000,
+    });
+
+    const verdictCalls = fetchMock.mock.calls.filter(([input]) =>
+      String(input).includes("/verdict"),
+    );
+    expect(verdictCalls).toHaveLength(1);
+  });
+
+  it("a 409 on verdict submission advances past the item instead of showing a fatal error (round 2, finding 6)", async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/api/review/next")) {
+        return new Response(JSON.stringify({ items: [ITEM_A, ITEM_B] }), { status: 200 });
+      }
+      if (url.includes("/verdict")) {
+        return new Response(JSON.stringify({ error: "already-resolved" }), { status: 409 });
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    render(<ReviewDeck />);
+    await waitFor(() => expect(screen.getByText("RAW LINE A")).toBeInTheDocument());
+
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "y" }));
+
+    await waitFor(() => expect(screen.getByText("RAW LINE B")).toBeInTheDocument(), {
+      timeout: 1000,
+    });
+    expect(screen.queryByText(/couldn't load the review queue/i)).not.toBeInTheDocument();
+  });
+
   it("Escape from a keyboard-opened picker returns focus to the Correct button, not <body>", async () => {
     // CategoryPicker has no DialogTrigger — `N` opens it programmatically,
     // so document.activeElement is <body> at the moment it opens, which is

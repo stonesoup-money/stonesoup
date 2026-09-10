@@ -161,4 +161,33 @@ describe("processExtractionJob — failure paths", () => {
       .first<{ status: string }>();
     expect(receipt?.status).toBe("failed");
   });
+
+  // Round 2, finding 2: `persistExtraction` used to be awaited outside any
+  // try in `processExtractionJob`, so a persist failure left the receipt
+  // at `status = 'extracting'` forever instead of `'failed'` — extraction
+  // discarded, message off to the DLQ, `UploadForm` polling every 2s with
+  // no ceiling. Reproduced here via the exact mechanism the finding names:
+  // a retry (or a receipt otherwise carrying a merchant already) trips
+  // migration 0002's `merchant_raw` write-once-from-NULL trigger, which
+  // throws from inside `persistExtraction`'s own `db.batch()` — not from
+  // any check `processExtractionJob` makes itself.
+  it("marks the receipt failed and throws when persistExtraction fails (merchant_raw write-once trigger)", async () => {
+    const { receiptId, r2Key } = await seedPendingReceipt();
+    await DB.prepare(`UPDATE receipts SET merchant_raw = 'A DIFFERENT MERCHANT' WHERE id = ?`)
+      .bind(receiptId)
+      .run();
+
+    await expect(
+      processExtractionJob(
+        env,
+        buildJob(receiptId, r2Key),
+        createFixtureExtractionClient(passFixture),
+      ),
+    ).rejects.toThrow();
+
+    const receipt = await DB.prepare(`SELECT status FROM receipts WHERE id = ?`)
+      .bind(receiptId)
+      .first<{ status: string }>();
+    expect(receipt?.status).toBe("failed");
+  });
 });

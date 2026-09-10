@@ -12,6 +12,7 @@
 import { isPurchaseDate } from "../dates.js";
 import { isValidCents } from "../money.js";
 import { isCategorySlug, isSubcategorySlug } from "../taxonomy.js";
+import type { FieldSpec } from "./schema.js";
 import { LINE_ITEM_FIELDS, RECEIPT_FIELDS } from "./schema.js";
 import type { ExtractedLineItem, ExtractionResult } from "./types.js";
 
@@ -21,27 +22,27 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function checkFieldValue(
-  name: string,
-  kind: "cents" | "text" | "unit-interval" | "purchase-date" | "category-slug" | "quantity",
-  nullable: boolean,
-  value: unknown,
-  errors: string[],
-  path: string,
-): void {
-  const label = path ? `${path}.${name}` : name;
+function checkFieldValue(field: FieldSpec, value: unknown, errors: string[], path: string): void {
+  const label = path ? `${path}.${field.name}` : field.name;
   if (value === null || value === undefined) {
-    if (!nullable) errors.push(`${label} is required and must not be null`);
+    if (!field.nullable) errors.push(`${label} is required and must not be null`);
     return;
   }
-  switch (kind) {
+  switch (field.kind) {
     case "cents":
       if (!isValidCents(value))
         errors.push(`${label} must be an integer number of cents, got ${JSON.stringify(value)}`);
       return;
     case "text":
-      if (typeof value !== "string")
+      if (typeof value !== "string") {
         errors.push(`${label} must be a string, got ${JSON.stringify(value)}`);
+      } else if (field.pattern && !new RegExp(field.pattern).test(value)) {
+        // Round 2, finding 5: closes the gap between the extraction
+        // contract and a D1 CHECK stricter than a bare "text" field (e.g.
+        // `payment_last4` requires exactly four digits) — see schema.ts's
+        // `FieldSpec.pattern`.
+        errors.push(`${label} must match ${field.pattern}, got ${JSON.stringify(value)}`);
+      }
       return;
     case "unit-interval":
       if (typeof value !== "number" || value < 0 || value > 1) {
@@ -75,7 +76,7 @@ function parseLineItem(value: unknown, index: number, errors: string[]): Extract
     return null;
   }
   for (const field of LINE_ITEM_FIELDS) {
-    checkFieldValue(field.name, field.kind, field.nullable, value[field.name], errors, path);
+    checkFieldValue(field, value[field.name], errors, path);
   }
   const category = value.category;
   const subcategory = value.subcategory;
@@ -121,7 +122,7 @@ export function parseExtractionResult(
   }
 
   for (const field of RECEIPT_FIELDS) {
-    checkFieldValue(field.name, field.kind, field.nullable, value[field.name], errors, "");
+    checkFieldValue(field, value[field.name], errors, "");
   }
 
   const rawLineItems = value.line_items;

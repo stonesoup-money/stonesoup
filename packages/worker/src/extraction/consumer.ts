@@ -108,13 +108,27 @@ export async function processExtractionJob(
     );
   }
 
-  await persistExtraction(env, {
-    receiptId: job.receiptId,
-    userId: job.userId,
-    sourceType: "photo",
-    result: parsed.value,
-    extractionModel: response.usage.model,
-    inputTokens: response.usage.inputTokens,
-    outputTokens: response.usage.outputTokens,
-  });
+  // Round 2, finding 2: this used to run unguarded. A persist failure —
+  // reachable via a model returning a malformed field the D1 CHECK
+  // constraints reject (e.g. `payment_last4` as `"****4242"`), or via a
+  // retry after partial success tripping the `merchant_raw` write-once
+  // trigger (migration 0002) — left the receipt at `status = 'extracting'`
+  // forever: the extraction discarded, the message off to the DLQ, and
+  // `UploadForm`'s 2s poll with no ceiling. `markFailed` here matches the
+  // same catch-and-fail pattern every other error path in this function
+  // already uses.
+  try {
+    await persistExtraction(env, {
+      receiptId: job.receiptId,
+      userId: job.userId,
+      sourceType: "photo",
+      result: parsed.value,
+      extractionModel: response.usage.model,
+      inputTokens: response.usage.inputTokens,
+      outputTokens: response.usage.outputTokens,
+    });
+  } catch (error) {
+    await markFailed(db, job.receiptId);
+    throw error;
+  }
 }

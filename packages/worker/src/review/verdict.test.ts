@@ -228,6 +228,46 @@ describe("writeVerdict — golden_set write path (Review invariant 3, 16)", () =
     expect(goldenSetCount?.c).toBe(0);
   });
 
+  // Round 2, finding 7: `goldenSetWritten` was hardcoded `true` instead of
+  // derived from what the golden_set INSERT actually inserted, so the
+  // concurrent-race case (writeVerdict's own lookup sees `resolved_at`
+  // NULL, but a second writer resolves the row before this function's own
+  // `db.batch()` runs) reported a golden-set write that inserted zero
+  // rows.
+  it("reports goldenSetWritten: false when a concurrent writer resolves the row between the lookup and the batch", async () => {
+    const { queueId } = await seedReviewItem();
+    const labeler = `labeler-${crypto.randomUUID()}`;
+
+    // A minimal D1Database stand-in that forwards every read/write to the
+    // real local D1 binding, except it races a genuine second write in
+    // ahead of writeVerdict's own db.batch() call, deterministically,
+    // instead of hoping two real concurrent writeVerdict() calls
+    // interleave the same way on every run. This reproduces exactly the
+    // window writeVerdict's own up-front lookup cannot see — that lookup
+    // already found resolved_at NULL before this fires.
+    const racingDb = {
+      prepare: (query: string) => DB.prepare(query),
+      batch: async (stmts: D1PreparedStatement[]) => {
+        await DB.prepare(
+          `UPDATE review_queue SET verdict = 'skipped', resolved_at = ? WHERE id = ?`,
+        )
+          .bind(new Date().toISOString(), queueId)
+          .run();
+        return DB.batch(stmts);
+      },
+    } as unknown as D1Database;
+
+    const outcome = await writeVerdict(racingDb, { queueId, verdict: "confirmed", labeler });
+    expect(outcome).toEqual({ ok: true, goldenSetWritten: false });
+
+    const goldenSetCount = await DB.prepare(
+      `SELECT COUNT(*) as c FROM golden_set WHERE labeler = ?`,
+    )
+      .bind(labeler)
+      .first<{ c: number }>();
+    expect(goldenSetCount?.c).toBe(0);
+  });
+
   it("accepts a valid correctedSubcategory", async () => {
     const { queueId, lineItemId } = await seedReviewItem({ category: "pantry" });
     const outcome = await writeVerdict(DB, {

@@ -28,6 +28,17 @@ export interface FieldSpec {
   kind: FieldKind;
   nullable: boolean;
   description: string;
+  /**
+   * A JSON Schema `pattern` (regex source), enforced both in the
+   * model-facing tool schema below and by `parse.ts`'s `checkFieldValue`
+   * — only meaningful for `kind: "text"`. Round 2, finding 5: without
+   * this, `payment_last4` had no constraint tighter than "is a string" on
+   * either side, while `receipts.payment_last4`'s D1 CHECK requires
+   * exactly four digits (`GLOB '[0-9][0-9][0-9][0-9]'`) — a model
+   * returning `"****4242"` passed the extraction contract and only failed
+   * at the database, deep inside `persistExtraction`.
+   */
+  pattern?: string;
 }
 
 /** Receipt-level fields — everything in `ExtractionResult` except
@@ -84,6 +95,7 @@ export const RECEIPT_FIELDS: readonly FieldSpec[] = [
     name: "payment_last4",
     kind: "text",
     nullable: true,
+    pattern: "^\\d{4}$",
     description: "Last 4 digits of the payment card, if printed.",
   },
 ];
@@ -177,6 +189,9 @@ function fieldSchema(
       break;
   }
   base.description = field.description;
+  if (field.pattern) {
+    base.pattern = field.pattern;
+  }
   if (field.nullable) {
     base.type = Array.isArray(base.type) ? base.type : [base.type as string, "null"];
   }

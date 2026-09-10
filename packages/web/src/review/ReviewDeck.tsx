@@ -8,7 +8,12 @@
 
 import { pickerCategorySlugs, TAXONOMY } from "@stonesoup/core";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { fetchNextReviewItems, type ReviewItem, submitVerdict } from "../api/client.js";
+import {
+  fetchNextReviewItems,
+  type ReviewItem,
+  submitVerdict,
+  VerdictConflictError,
+} from "../api/client.js";
 import { CategoryPicker } from "./CategoryPicker.js";
 import "./review.css";
 import { ReviewCard } from "./ReviewCard.js";
@@ -60,6 +65,13 @@ export function ReviewDeck({ reloadSignal }: ReviewDeckProps = {}) {
     setTimeout(() => {
       setItems((prev) => (prev ? mutate(prev) : prev));
       setAdvancing(false);
+      // Round 2, finding 6: this used to clear in each handler's `.then()`,
+      // the moment the network response came back — well before `current`
+      // actually changes here. A second `Y` in that window passed the
+      // `!submitting` guard and double-submitted the same `queueId`. The
+      // guard is only actually closed by keeping `submitting` true for the
+      // *entire* at-risk window: the request AND this advance.
+      setSubmitting(false);
     }, ADVANCE_ANIMATION_MS);
   }, []);
 
@@ -75,50 +87,47 @@ export function ReviewDeck({ reloadSignal }: ReviewDeckProps = {}) {
   // `verdict.ts`. `submitting` gates every entry point: the keyboard
   // handlers below via `useReviewKeys`'s `enabled`, and the card's button
   // `onClick`s via the early return in each handler.
+  // Round 2, finding 6: a 409 means the server's already-resolved guard
+  // (`verdict.ts`) rejected this submission — the queue item is already
+  // resolved, whether by the race this guard now closes or by another
+  // client entirely. The right recovery is to advance past it like a
+  // normal success, not to replace the whole deck with a fatal error
+  // banner via `setError`.
+  const handleVerdictError = useCallback(
+    (err: Error) => {
+      if (err instanceof VerdictConflictError) {
+        dropCurrent();
+        return;
+      }
+      setSubmitting(false);
+      setError(err.message);
+    },
+    [dropCurrent],
+  );
+
   const handleConfirm = useCallback(() => {
     if (!current || submitting) return;
     setSubmitting(true);
-    submitVerdict(current.queueId, { verdict: "confirmed" })
-      .then(() => {
-        setSubmitting(false);
-        dropCurrent();
-      })
-      .catch((err: Error) => {
-        setSubmitting(false);
-        setError(err.message);
-      });
-  }, [current, submitting, dropCurrent]);
+    submitVerdict(current.queueId, { verdict: "confirmed" }).then(dropCurrent, handleVerdictError);
+  }, [current, submitting, dropCurrent, handleVerdictError]);
 
   const handleSkip = useCallback(() => {
     if (!current || submitting) return;
     setSubmitting(true);
-    submitVerdict(current.queueId, { verdict: "skipped" })
-      .then(() => {
-        setSubmitting(false);
-        dropCurrent();
-      })
-      .catch((err: Error) => {
-        setSubmitting(false);
-        setError(err.message);
-      });
-  }, [current, submitting, dropCurrent]);
+    submitVerdict(current.queueId, { verdict: "skipped" }).then(dropCurrent, handleVerdictError);
+  }, [current, submitting, dropCurrent, handleVerdictError]);
 
   const handleCorrect = useCallback(
     (categorySlug: string) => {
       if (!current || submitting) return;
       setSubmitting(true);
       setPickerOpen(false);
-      submitVerdict(current.queueId, { verdict: "corrected", correctedCategory: categorySlug })
-        .then(() => {
-          setSubmitting(false);
-          dropCurrent();
-        })
-        .catch((err: Error) => {
-          setSubmitting(false);
-          setError(err.message);
-        });
+      submitVerdict(current.queueId, {
+        verdict: "corrected",
+        correctedCategory: categorySlug,
+      }).then(dropCurrent, handleVerdictError);
     },
-    [current, submitting, dropCurrent],
+    [current, submitting, dropCurrent, handleVerdictError],
   );
 
   const handleCorrectToIndex = useCallback(

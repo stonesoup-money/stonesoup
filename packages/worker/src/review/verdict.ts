@@ -192,7 +192,17 @@ export async function writeVerdict(db: D1Database, input: VerdictInput): Promise
       ),
   );
 
-  await db.batch(statements);
+  const results = await db.batch(statements);
 
-  return { ok: true, goldenSetWritten: true };
+  // Round 2, finding 7: `goldenSetWritten` was hardcoded `true` rather
+  // than derived from what the golden_set INSERT (always `statements[0]`
+  // — see the ordering note in the module header) actually inserted. The
+  // guard above only rejects a row this function's *own* read already saw
+  // resolved; a concurrent writer that resolves the same `queueId`
+  // between that read and this `db.batch()` makes the guarded INSERT's
+  // `WHERE rq.resolved_at IS NULL` match zero rows, and the old hardcoded
+  // value reported a golden-set write that never happened.
+  const goldenSetWritten = (results[0]?.meta.changes ?? 0) > 0;
+
+  return { ok: true, goldenSetWritten };
 }

@@ -1,9 +1,14 @@
-import { DEFAULT_EXTRACTION_MODEL, type ExtractionJob } from "@stonesoup/core";
+import {
+  DEFAULT_EXTRACTION_MODEL,
+  type ExtractionClient,
+  type ExtractionJob,
+} from "@stonesoup/core";
 import { Hono } from "hono";
 import { withSession } from "./auth/session.js";
 import { validateAnthropicKey } from "./byok/validate.js";
 import { createAnthropicExtractionClient } from "./extraction/anthropic-client.js";
 import { processExtractionJob } from "./extraction/consumer.js";
+import { createFixtureExtractionClient } from "./extraction/fixture-client.js";
 import { publicPages } from "./public/pages.js";
 import { receiptsRoutes } from "./receipts/upload.js";
 import { reviewRoutes } from "./review/routes.js";
@@ -51,6 +56,37 @@ app.get("/api/byok/status", async (c) => {
 app.route("/api/receipts", receiptsRoutes);
 app.route("/api/review", reviewRoutes);
 
+/**
+ * Round 2, finding 1 (Review invariant 6): `queue()` below used to build a
+ * real Anthropic client unconditionally. The Workers Vitest pool loads
+ * `env.ANTHROPIC_API_KEY` from a contributor's own `.dev.vars` (it logs
+ * "Using secrets defined in .dev.vars"), and `receipts/upload.test.ts`'s
+ * `SELF.fetch(POST /api/receipts)` calls enqueue onto the real
+ * `EXTRACTION_QUEUE` — so a test reaching `queue()` by any path, direct or
+ * via the local queue simulator, could fire a live vision call on that
+ * key. `EXTRACTION_TEST_FIXTURE_CLIENT` is the guard: `vitest.config.ts`'s
+ * `miniflare.bindings` is the only place that ever sets it (never
+ * `wrangler.jsonc`, never `.dev.vars`), so this is a positive test-mode
+ * signal, not a guess from an absent key. Under it, the client resolves
+ * to `createFixtureExtractionClient` with a deliberately invalid result —
+ * it never touches the network, and its failure path (mark the receipt
+ * `failed`) is the same one `consumer.test.ts`'s malformed-result test
+ * already exercises.
+ */
+function resolveExtractionClient(env: {
+  ANTHROPIC_API_KEY: string;
+  ANTHROPIC_MODEL: string;
+  EXTRACTION_TEST_FIXTURE_CLIENT?: string;
+}): ExtractionClient {
+  if (env.EXTRACTION_TEST_FIXTURE_CLIENT) {
+    return createFixtureExtractionClient({ __testOnly: "EXTRACTION_TEST_FIXTURE_CLIENT" });
+  }
+  return createAnthropicExtractionClient({
+    ANTHROPIC_API_KEY: env.ANTHROPIC_API_KEY,
+    ANTHROPIC_MODEL: env.ANTHROPIC_MODEL,
+  });
+}
+
 export default {
   fetch: app.fetch,
 
@@ -64,10 +100,7 @@ export default {
   // receipt `failed` (inside `processExtractionJob`) and retries the
   // message explicitly, up to `max_retries: 3` before the configured DLQ.
   async queue(batch, env, _ctx) {
-    const client = createAnthropicExtractionClient({
-      ANTHROPIC_API_KEY: env.ANTHROPIC_API_KEY,
-      ANTHROPIC_MODEL: env.ANTHROPIC_MODEL,
-    });
+    const client = resolveExtractionClient(env);
     for (const message of batch.messages) {
       try {
         await processExtractionJob(env, message.body as ExtractionJob, client);

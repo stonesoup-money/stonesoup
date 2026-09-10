@@ -33,4 +33,13 @@ describe("toExtractionJsonSchema", () => {
     expect(properties.total_cents?.type).toEqual(["integer", "null"]);
     expect(properties.subtotal_cents?.type).toEqual(["integer", "null"]);
   });
+
+  // Round 2, finding 5: payment_last4 had no `pattern` in the tool schema,
+  // leaving a gap between what the model is told to return and what
+  // `receipts.payment_last4`'s D1 CHECK actually requires (exactly four
+  // digits).
+  it("constrains payment_last4 to exactly four digits", () => {
+    const properties = schema.properties as Record<string, Record<string, unknown>>;
+    expect(properties.payment_last4?.pattern).toBe("^\\d{4}$");
+  });
 });

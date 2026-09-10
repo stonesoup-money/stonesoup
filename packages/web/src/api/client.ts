@@ -58,12 +58,30 @@ export interface SubmitVerdictBody {
   correctedSubcategory?: string;
 }
 
+/**
+ * Thrown for a 409 specifically (round 2, finding 6) — the server's
+ * already-resolved guard in `verdict.ts` rejecting a second verdict on the
+ * same `queueId`. `ReviewDeck.tsx` distinguishes this from every other
+ * failure: the queue item is already resolved server-side, so the right
+ * recovery is to advance past it, not to replace the whole deck with a
+ * fatal error banner.
+ */
+export class VerdictConflictError extends Error {
+  constructor(queueId: string) {
+    super(`verdict submission failed: 409 (queue item ${queueId} already resolved)`);
+    this.name = "VerdictConflictError";
+  }
+}
+
 export async function submitVerdict(queueId: string, body: SubmitVerdictBody): Promise<void> {
   const res = await fetch(`/api/review/${queueId}/verdict`, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
   });
+  if (res.status === 409) {
+    throw new VerdictConflictError(queueId);
+  }
   if (!res.ok) {
     throw new Error(`verdict submission failed: ${res.status}`);
   }

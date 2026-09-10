@@ -122,4 +122,20 @@ describe("parseExtractionResult — never throws, rejects with errors", () => {
     const result = parseExtractionResult(validPayload({ line_items: "nope" }), META);
     expect(result.ok).toBe(false);
   });
+
+  // Round 2, finding 5: closes the gap between the extraction contract
+  // and receipts.payment_last4's D1 CHECK (exactly four digits) — a model
+  // returning a masked card number used to pass this parser and only fail
+  // at the database, deep inside persistExtraction.
+  it("rejects a payment_last4 that is not exactly four digits", () => {
+    const result = parseExtractionResult(validPayload({ payment_last4: "****4242" }), META);
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("expected rejection");
+    expect(result.errors.join(" ")).toMatch(/payment_last4/);
+  });
+
+  it("accepts a null payment_last4", () => {
+    const result = parseExtractionResult(validPayload({ payment_last4: null }), META);
+    expect(result.ok).toBe(true);
+  });
 });
