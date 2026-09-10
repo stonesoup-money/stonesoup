@@ -233,6 +233,34 @@ describe("R2", () => {
       .first();
     expect(lineItemRow).toBeNull();
   });
+
+  it("a failed R2 delete reports r2Deleted: false, r2Key retained, and r2Error populated — never a throw or a false success (round-1's contract, locked in without mocking R2)", async () => {
+    // receipts.r2_key is a plain TEXT column with no length constraint
+    // (see delete.ts's module doc), but R2 object keys are capped at 1024
+    // bytes. Insert a receipt whose stored r2_key is well past that cap —
+    // directly into D1, never through RECEIPTS.put, so no real object
+    // backs it — and the real local R2 binding rejects the delete() call
+    // for us. This reaches the catch branch without mocking R2 (AGENTS.md
+    // invariant #6): it drives the real binding into a genuine,
+    // deterministic rejection rather than faking one.
+    const overLengthR2Key = `user-1/2026/06/${"a".repeat(1500)}`;
+    const receiptId = await insertReceipt(overLengthR2Key);
+
+    const result = await deleteReceipt(DB, RECEIPTS, receiptId);
+
+    expect(result.deleted).toBe(true);
+    expect(result.r2Key).toBe(overLengthR2Key);
+    expect(result.r2Deleted).toBe(false);
+    expect(result.r2Error).not.toBeNull();
+
+    // D1 still committed — the row is gone even though the R2 delete
+    // failed, exactly the "recoverable orphan" failure mode the module
+    // doc describes.
+    const receiptRow = await DB.prepare(`SELECT id FROM receipts WHERE id = ?`)
+      .bind(receiptId)
+      .first();
+    expect(receiptRow).toBeNull();
+  });
 });
 
 describe("ordering is load-bearing (the ticket's actual regression guard)", () => {

@@ -26,6 +26,23 @@
  * leave a `sources` row with no `receipt_sources` link, and that is
  * correct, not a leak.
  *
+ * **Deleting `receipt_sources` frees the Gmail message ID it held, and
+ * that is a known, deliberately unsolved hazard — STON-25.**
+ * `idx_receipt_sources_external_id` is a *global* partial unique index on
+ * `external_id` (the Gmail message ID); it is the entire mechanism behind
+ * AGENTS.md's "Gmail message ID is a unique key; re-syncs must not
+ * duplicate." Once STON-6 (Gmail sync) and STON-24 (the route that calls
+ * this primitive) both exist, deleting a receipt removes the only row
+ * holding that ID, so the next sync of the backfill window finds nothing
+ * to dedupe against and silently re-ingests the same message — the exact
+ * prescription-receipt case this ticket was filed for, resurrected. This
+ * primitive cannot fix that itself: keeping the `receipt_sources` row
+ * would trip `ON DELETE RESTRICT` on `DELETE FROM receipts`, and a
+ * tombstone table is scope growth this ticket refuses. Suppressing
+ * re-ingestion of a deleted message is a sync-side design decision (it
+ * needs a call about suppression state, weighed against the privacy
+ * boundary) and is tracked as STON-25, not solved here.
+ *
  * **Golden-set records survive a receipt delete, deliberately and
  * permanently.** `golden_set` has no `receipt_id`, no `user_id`, and no
  * purchase timestamp — the anonymization boundary is enforced by the
