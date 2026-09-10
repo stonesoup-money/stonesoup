@@ -1,6 +1,6 @@
 import { env } from "cloudflare:test";
 import { beforeEach, describe, expect, it } from "vitest";
-import { linkOrMerge } from "./merge.js";
+import { ensureSourceLinkStatement, linkOrMerge, writeSourceLink } from "./merge.js";
 
 /**
  * Integration coverage for the D1-backed half of STON-11's dedupe rule —
@@ -844,5 +844,232 @@ describe("J: re-pointing a real, external_id-bearing receipt_sources row is load
       .bind("gmail-msg-repoint-proof")
       .first<{ receipt_id: string }>();
     expect(repointedLink?.receipt_id).toBe(incomingId);
+  });
+});
+
+// Test K: STON-19 — an already-bound external_id must refuse, never
+// silently re-point and strand the holder's only receipt_sources row (the
+// bug this ticket fixes). K1 is the exact repro from the ticket, and also
+// locks in the round-2 fix that lineItemsAlreadyPresent reads true on this
+// path (review round 2, finding 2) — not the literal item count, a
+// deliberate mismatch a well-meaning cleanup could revert unnoticed; K2
+// proves the guard sits ahead of the merge batch, not just the no-merge
+// path; K3 proves the normal Gmail re-sync (same receiptId) is untouched;
+// K4 proves the upsert statement itself cannot move a link even in the
+// check-then-write race window; K5 proves writeSourceLink (round 2,
+// finding 1) turns that same no-op into an observable "not linked" outcome
+// instead of a clean success noMerge() would otherwise report.
+describe("K: an external_id already bound to a different receipt refuses instead of stealing the link", () => {
+  it("K1: refuses and leaves the holder's only source row intact (the stranding repro)", async () => {
+    const receiptX = await insertReceipt({
+      merchantRaw: "Corner Store X",
+      createdAt: "2026-08-01T00:00:00.000Z",
+    });
+    const linkResult = await linkOrMerge(DB, {
+      receiptId: receiptX,
+      sourceId: gmailSourceId,
+      sourceType: "gmail",
+      externalId: "gmail-msg-steal",
+    });
+    expect(linkResult).toMatchObject({
+      merged: false,
+      refusedReason: null,
+      externalIdBoundTo: null,
+    });
+    expect(await countReceiptSources(receiptX)).toBe(1);
+
+    const receiptY = await insertReceipt({
+      merchantRaw: "Corner Store Y",
+      createdAt: "2026-08-01T00:01:00.000Z",
+    });
+    const stealAttempt = await linkOrMerge(DB, {
+      receiptId: receiptY,
+      sourceId: gmailSourceId,
+      sourceType: "gmail",
+      externalId: "gmail-msg-steal",
+    });
+
+    expect(stealAttempt.merged).toBe(false);
+    expect(stealAttempt.refusedReason).toBe("external-id-bound-to-other-receipt");
+    expect(stealAttempt.externalIdBoundTo).toBe(receiptX);
+    expect(stealAttempt.finalReceiptId).toBe(receiptY);
+    // Review round 2, finding 2: this forced `true` is the entire round-1
+    // remedy — receiptY has zero receipt_sources rows (asserted below) yet
+    // this must still read `true`, a "do not write" directive rather than
+    // a literal count, so restoring the computed
+    // `lineItemCount(...) > 0` here (which would read `false`) is a
+    // regression this assertion exists to catch.
+    expect(stealAttempt.lineItemsAlreadyPresent).toBe(true);
+
+    // The exact zero-source-rows stranding the ticket names — asserted as
+    // not happening.
+    expect(await countReceiptSources(receiptX)).toBe(1);
+    const stillBound = await DB.prepare(
+      `SELECT receipt_id FROM receipt_sources WHERE external_id = ?`,
+    )
+      .bind("gmail-msg-steal")
+      .first<{ receipt_id: string }>();
+    expect(stillBound?.receipt_id).toBe(receiptX);
+
+    expect(await countReceiptSources(receiptY)).toBe(0);
+    expect(await countReceipts([receiptX, receiptY])).toBe(2);
+  });
+
+  it("K2: refuses ahead of an otherwise-eligible merge batch — nothing merges, nothing deletes", async () => {
+    const receiptZ = await insertReceipt({
+      merchantRaw: "Held Store Z",
+      createdAt: "2026-08-05T00:00:00.000Z",
+    });
+    await linkOrMerge(DB, {
+      receiptId: receiptZ,
+      sourceId: gmailSourceId,
+      sourceType: "gmail",
+      externalId: "gmail-msg-steal-2",
+    });
+
+    // Candidate X and incoming Y would otherwise merge (same merchant,
+    // date, total) — X already has known (photo) provenance.
+    const candidateX = await insertReceipt({
+      merchantRaw: "Merge Candidate",
+      merchantNormalized: "Merge Candidate",
+      purchasedAt: "2026-08-05",
+      totalCents: 1_999,
+      createdAt: "2026-08-05T00:01:00.000Z",
+    });
+    await linkSourceDirect(candidateX, photoSourceId);
+
+    const incomingY = await insertReceipt({
+      merchantRaw: "MERGE CANDIDATE",
+      merchantNormalized: "MERGE CANDIDATE",
+      purchasedAt: "2026-08-05",
+      totalCents: 1_999,
+      createdAt: "2026-08-05T00:02:00.000Z",
+    });
+
+    const result = await linkOrMerge(DB, {
+      receiptId: incomingY,
+      sourceId: gmailSourceId,
+      sourceType: "gmail",
+      externalId: "gmail-msg-steal-2",
+    });
+
+    expect(result.merged).toBe(false);
+    expect(result.refusedReason).toBe("external-id-bound-to-other-receipt");
+    expect(result.externalIdBoundTo).toBe(receiptZ);
+
+    // Nothing merged, nothing deleted: all three receipts still exist, Z
+    // still holds its link, X keeps its own photo link untouched.
+    expect(await countReceipts([receiptZ, candidateX, incomingY])).toBe(3);
+    expect(await countReceiptSources(receiptZ)).toBe(1);
+    expect(await countReceiptSources(candidateX)).toBe(1);
+    expect(await countReceiptSources(incomingY)).toBe(0);
+  });
+
+  it("K3: a same-receipt re-bind (the normal Gmail re-sync) is untouched", async () => {
+    const receiptId = await insertReceipt({
+      merchantRaw: "Resync Store",
+      createdAt: "2026-08-10T00:00:00.000Z",
+    });
+    await linkOrMerge(DB, {
+      receiptId,
+      sourceId: gmailSourceId,
+      sourceType: "gmail",
+      externalId: "gmail-msg-selflink",
+    });
+    const second = await linkOrMerge(DB, {
+      receiptId,
+      sourceId: gmailSourceId,
+      sourceType: "gmail",
+      externalId: "gmail-msg-selflink",
+    });
+
+    expect(second.refusedReason).toBeNull();
+    expect(second.externalIdBoundTo).toBeNull();
+    const rows = await DB.prepare(`SELECT COUNT(*) as c FROM receipt_sources WHERE external_id = ?`)
+      .bind("gmail-msg-selflink")
+      .first<{ c: number }>();
+    expect(rows?.c).toBe(1);
+  });
+
+  it("K4: the upsert statement itself cannot move a link (race proof)", async () => {
+    const receiptX = await insertReceipt({
+      merchantRaw: "Race Store X",
+      createdAt: "2026-08-15T00:00:00.000Z",
+    });
+    const receiptY = await insertReceipt({
+      merchantRaw: "Race Store Y",
+      createdAt: "2026-08-15T00:01:00.000Z",
+    });
+
+    // Bind the external_id to X directly — simulating the state the guard
+    // already read before a race-window write lands.
+    await ensureSourceLinkStatement(DB, {
+      receiptId: receiptX,
+      sourceId: gmailSourceId,
+      externalId: "gmail-msg-race",
+    }).run();
+
+    // A statement built for Y with the same external_id — the write that
+    // would land after the guard's SELECT in the check-then-write window.
+    await expect(
+      ensureSourceLinkStatement(DB, {
+        receiptId: receiptY,
+        sourceId: gmailSourceId,
+        externalId: "gmail-msg-race",
+      }).run(),
+    ).resolves.toBeDefined();
+
+    const row = await DB.prepare(`SELECT receipt_id FROM receipt_sources WHERE external_id = ?`)
+      .bind("gmail-msg-race")
+      .first<{ receipt_id: string }>();
+    expect(row?.receipt_id).toBe(receiptX);
+
+    const count = await DB.prepare(
+      `SELECT COUNT(*) as c FROM receipt_sources WHERE external_id = ?`,
+    )
+      .bind("gmail-msg-race")
+      .first<{ c: number }>();
+    expect(count?.c).toBe(1);
+  });
+
+  it("K5: writeSourceLink observes the race K4 proves, instead of reporting a clean link (round 2)", async () => {
+    const receiptX = await insertReceipt({
+      merchantRaw: "Race Store A",
+      createdAt: "2026-08-16T00:00:00.000Z",
+    });
+    const receiptY = await insertReceipt({
+      merchantRaw: "Race Store B",
+      createdAt: "2026-08-16T00:01:00.000Z",
+    });
+
+    // Same setup as K4: bind the external_id to X directly, simulating a
+    // concurrent call's write landing in the gap between this call's own
+    // upfront guard SELECT (already proven unable to see it, K4) and its
+    // write. Driving writeSourceLink for Y here is exactly the write
+    // noMerge() performs on that path.
+    await ensureSourceLinkStatement(DB, {
+      receiptId: receiptX,
+      sourceId: gmailSourceId,
+      externalId: "gmail-msg-race-observed",
+    }).run();
+
+    const outcome = await writeSourceLink(DB, {
+      receiptId: receiptY,
+      sourceId: gmailSourceId,
+      externalId: "gmail-msg-race-observed",
+    });
+
+    // K4 already proves the row itself never moves. This proves the
+    // *caller* is told that — not a silent `{ linked: true }` that would
+    // send noMerge() on to report a clean success for a link it never
+    // made (review round 2, finding 1).
+    expect(outcome.linked).toBe(false);
+    expect(outcome.boundTo).toBe(receiptX);
+
+    const row = await DB.prepare(`SELECT receipt_id FROM receipt_sources WHERE external_id = ?`)
+      .bind("gmail-msg-race-observed")
+      .first<{ receipt_id: string }>();
+    expect(row?.receipt_id).toBe(receiptX);
+    expect(await countReceiptSources(receiptY)).toBe(0);
   });
 });
