@@ -215,11 +215,16 @@ async function lineItemCount(db: D1Database, receiptId: string): Promise<number>
  *     transactions, so that check-then-write has a race window; this
  *     `WHERE` makes the statement itself structurally incapable of moving
  *     a link regardless — when it doesn't match, the upsert is a silent
- *     no-op (link not made) rather than a steal. `receipt_id =
- *     excluded.receipt_id` in the `SET` list is consequently always a
- *     no-op too; it is kept only so the statement still reads as an
- *     upsert — do not read it as redundant with the `WHERE` and remove
- *     either.
+ *     no-op (link not made) rather than a steal, at the SQL level. Silent
+ *     to this statement, not necessarily to its caller: `writeSourceLink`
+ *     below wraps this exact statement and turns that no-op into an
+ *     observable outcome for `noMerge()` (review round 2, finding 1) —
+ *     `.run()`'s own `meta.changes` already says whether a row moved;
+ *     nothing here needs to change for that to be true, only who reads
+ *     it. `receipt_id = excluded.receipt_id` in the `SET` list is
+ *     consequently always a no-op too; it is kept only so the statement
+ *     still reads as an upsert — do not read it as redundant with the
+ *     `WHERE` and remove either.
  *   - `external_id` NULL (photo): the partial unique index never applies,
  *     so an `INSERT ... SELECT ... WHERE NOT EXISTS (...)` guard is used
  *     instead of anything REPLACE-shaped.
@@ -256,6 +261,56 @@ export function ensureSourceLinkStatement(
     .bind(id, args.receiptId, args.sourceId, ingestedAt, args.receiptId, args.sourceId);
 }
 
+export interface SourceLinkOutcome {
+  /** `false` when the statement's own `WHERE` (see `ensureSourceLinkStatement`)
+   * silently blocked the write because, as of this write, `external_id` is
+   * already held by some other receipt — the check-then-write race window
+   * `linkOrMerge`'s upfront guard cannot close on its own (D1 has no
+   * interactive transactions). Always `true` for the `external_id === null`
+   * (photo) path — its `WHERE NOT EXISTS` guard only ever no-ops on a
+   * genuine duplicate call for the same receipt, never a race with another
+   * receipt, so there is nothing to detect there. */
+  linked: boolean;
+  /** The receipt that holds `externalId` as of this write, when `linked` is
+   * `false`. `null` on every other outcome, including every `linked: true`. */
+  boundTo: string | null;
+}
+
+/**
+ * Runs `ensureSourceLinkStatement` and reports whether the write actually
+ * landed, rather than trusting that a resolved promise means a row changed
+ * (review round 2, finding 1). For the `external_id !== null` branch,
+ * `meta.changes === 0` is possible only when the statement's `WHERE` blocked
+ * an upsert into a row some other receipt already holds as of this write: a
+ * fresh insert always changes exactly one row, and a same-receipt conflict's
+ * `DO UPDATE` always changes exactly one row too (SQLite writes the row
+ * whether or not the new values differ from the old ones). So `changes === 0`
+ * means, unambiguously, "someone else holds it now" — this function re-reads
+ * who and reports it, instead of letting the caller read a resolved `.run()`
+ * as success.
+ *
+ * Exported (marked internal) so the race this exists to detect can be proven
+ * directly against real D1 in merge.test.ts, the same way
+ * `ensureSourceLinkStatement` already proves the statement's `WHERE` cannot
+ * move a link — by binding `externalId` to one receipt first and then
+ * driving this function for another, rather than needing genuine concurrent
+ * callers.
+ */
+export async function writeSourceLink(
+  db: D1Database,
+  args: { receiptId: string; sourceId: string; externalId: string | null },
+): Promise<SourceLinkOutcome> {
+  const result = await ensureSourceLinkStatement(db, args).run();
+  if (args.externalId === null || result.meta.changes !== 0) {
+    return { linked: true, boundTo: null };
+  }
+  const holder = await db
+    .prepare(`SELECT receipt_id FROM receipt_sources WHERE external_id = ?`)
+    .bind(args.externalId)
+    .first<{ receipt_id: string }>();
+  return { linked: false, boundTo: holder?.receipt_id ?? null };
+}
+
 /**
  * The single dedupe entry point. Later epics (STON-5 photo, STON-6 email)
  * call this from their extraction-persist step rather than reinventing it.
@@ -272,6 +327,15 @@ export function ensureSourceLinkStatement(
  * correctly. That is the accepted trade-off — a visible, recoverable
  * duplicate beats the permanently stranded receipt this ticket exists to
  * prevent — do not "fix" it by linking anyway.
+ *
+ * That same exception is also reachable without ever hitting the upfront
+ * guard below (review round 2, finding 1): the guard's `SELECT` and the
+ * no-merge path's write are two round trips with no interactive
+ * transaction between them, so a concurrent call can bind `externalId`
+ * to a different receipt in the gap. `noMerge()` uses `writeSourceLink`
+ * rather than a bare `.run()` specifically so it notices that no-op and
+ * returns the identical refusal shape instead of a clean "linked"
+ * result — see `noMerge`'s body.
  */
 export async function linkOrMerge(
   db: D1Database,
@@ -321,11 +385,17 @@ export async function linkOrMerge(
 
   const noMerge = async (
     // `refusedReason` is narrowed to exclude "external-id-bound-to-other-
-    // receipt" (review round 2, finding 2): the plan is explicit that
-    // this refusal must never route through noMerge(), because noMerge()'s
-    // whole job is to write the source link — the exact write being
-    // refused. This makes that a type error, not just a prose rule; the
-    // guard above returns its own result literal instead.
+    // receipt" (review round 2, finding 2): the plan is explicit that a
+    // *caller of* noMerge() must never statically request this refusal,
+    // because noMerge()'s whole job is to write the source link — the
+    // exact write being refused when the upfront guard already knows
+    // about it. This makes that a type error, not just a prose rule; the
+    // guard above returns its own result literal instead. It does not
+    // stop noMerge() from *discovering*, dynamically, that this same
+    // refusal is the right answer after all — see the writeSourceLink
+    // check immediately below, which is a distinct case (a race the type
+    // system cannot see coming) from the one this parameter type guards
+    // against (a call site that already knows).
     extra: Partial<{
       ambiguousMatchCount: LinkOrMergeResult["ambiguousMatchCount"];
       refusedReason: Exclude<
@@ -334,11 +404,31 @@ export async function linkOrMerge(
       >;
     }> = {},
   ): Promise<LinkOrMergeResult> => {
-    await ensureSourceLinkStatement(db, {
+    const linkOutcome = await writeSourceLink(db, {
       receiptId: input.receiptId,
       sourceId: input.sourceId,
       externalId: input.externalId,
-    }).run();
+    });
+
+    // Review round 2, finding 1: the upfront guard's SELECT and this
+    // write are not atomic, so a concurrent call can have bound
+    // `externalId` to a different receipt in between. writeSourceLink's
+    // `meta.changes` check (see its own doc comment) is what notices —
+    // report the same refusal the upfront guard would have given if it
+    // had run a moment later, instead of a clean "linked" result that
+    // invites the caller to write line items to a receipt that, despite
+    // this call believing otherwise, holds zero receipt_sources rows.
+    if (!linkOutcome.linked) {
+      return {
+        finalReceiptId: input.receiptId,
+        merged: false,
+        lineItemsAlreadyPresent: true,
+        ambiguousMatchCount: null,
+        refusedReason: "external-id-bound-to-other-receipt",
+        externalIdBoundTo: linkOutcome.boundTo,
+      };
+    }
+
     return {
       finalReceiptId: input.receiptId,
       merged: false,
@@ -433,7 +523,18 @@ export async function linkOrMerge(
     db
       .prepare(`UPDATE receipt_sources SET receipt_id = ? WHERE receipt_id = ?`)
       .bind(survivor.id, duplicate.id),
-    // 2. Link the incoming source to the survivor.
+    // 2. Link the incoming source to the survivor. This statement has the
+    // same race-loss no-op as noMerge()'s (review round 2, finding 1),
+    // deliberately left un-instrumented here: unlike the no-merge path,
+    // losing this particular write cannot strand anything, because
+    // statement 1 has already given survivor.id every receipt_sources row
+    // the duplicate held, so the caller's `finalReceiptId` keeps known
+    // provenance regardless of whether this insert lands. The only cost
+    // of the race here is losing this externalId's re-sync idempotency
+    // record on the survivor — a future re-sync will find it still bound
+    // to whoever holds it, not to the survivor, which is the accepted,
+    // narrower gap; it is not the permanent-stranding class this ticket
+    // closes.
     ensureSourceLinkStatement(db, {
       receiptId: survivor.id,
       sourceId: input.sourceId,

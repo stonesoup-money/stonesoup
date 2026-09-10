@@ -1,6 +1,6 @@
 import { env } from "cloudflare:test";
 import { beforeEach, describe, expect, it } from "vitest";
-import { ensureSourceLinkStatement, linkOrMerge } from "./merge.js";
+import { ensureSourceLinkStatement, linkOrMerge, writeSourceLink } from "./merge.js";
 
 /**
  * Integration coverage for the D1-backed half of STON-11's dedupe rule —
@@ -849,11 +849,16 @@ describe("J: re-pointing a real, external_id-bearing receipt_sources row is load
 
 // Test K: STON-19 — an already-bound external_id must refuse, never
 // silently re-point and strand the holder's only receipt_sources row (the
-// bug this ticket fixes). K1 is the exact repro from the ticket; K2 proves
-// the guard sits ahead of the merge batch, not just the no-merge path; K3
-// proves the normal Gmail re-sync (same receiptId) is untouched; K4 proves
-// the upsert statement itself cannot move a link even in the check-then-
-// write race window.
+// bug this ticket fixes). K1 is the exact repro from the ticket, and also
+// locks in the round-2 fix that lineItemsAlreadyPresent reads true on this
+// path (review round 2, finding 2) — not the literal item count, a
+// deliberate mismatch a well-meaning cleanup could revert unnoticed; K2
+// proves the guard sits ahead of the merge batch, not just the no-merge
+// path; K3 proves the normal Gmail re-sync (same receiptId) is untouched;
+// K4 proves the upsert statement itself cannot move a link even in the
+// check-then-write race window; K5 proves writeSourceLink (round 2,
+// finding 1) turns that same no-op into an observable "not linked" outcome
+// instead of a clean success noMerge() would otherwise report.
 describe("K: an external_id already bound to a different receipt refuses instead of stealing the link", () => {
   it("K1: refuses and leaves the holder's only source row intact (the stranding repro)", async () => {
     const receiptX = await insertReceipt({
@@ -888,6 +893,13 @@ describe("K: an external_id already bound to a different receipt refuses instead
     expect(stealAttempt.refusedReason).toBe("external-id-bound-to-other-receipt");
     expect(stealAttempt.externalIdBoundTo).toBe(receiptX);
     expect(stealAttempt.finalReceiptId).toBe(receiptY);
+    // Review round 2, finding 2: this forced `true` is the entire round-1
+    // remedy — receiptY has zero receipt_sources rows (asserted below) yet
+    // this must still read `true`, a "do not write" directive rather than
+    // a literal count, so restoring the computed
+    // `lineItemCount(...) > 0` here (which would read `false`) is a
+    // regression this assertion exists to catch.
+    expect(stealAttempt.lineItemsAlreadyPresent).toBe(true);
 
     // The exact zero-source-rows stranding the ticket names — asserted as
     // not happening.
@@ -1018,5 +1030,46 @@ describe("K: an external_id already bound to a different receipt refuses instead
       .bind("gmail-msg-race")
       .first<{ c: number }>();
     expect(count?.c).toBe(1);
+  });
+
+  it("K5: writeSourceLink observes the race K4 proves, instead of reporting a clean link (round 2)", async () => {
+    const receiptX = await insertReceipt({
+      merchantRaw: "Race Store A",
+      createdAt: "2026-08-16T00:00:00.000Z",
+    });
+    const receiptY = await insertReceipt({
+      merchantRaw: "Race Store B",
+      createdAt: "2026-08-16T00:01:00.000Z",
+    });
+
+    // Same setup as K4: bind the external_id to X directly, simulating a
+    // concurrent call's write landing in the gap between this call's own
+    // upfront guard SELECT (already proven unable to see it, K4) and its
+    // write. Driving writeSourceLink for Y here is exactly the write
+    // noMerge() performs on that path.
+    await ensureSourceLinkStatement(DB, {
+      receiptId: receiptX,
+      sourceId: gmailSourceId,
+      externalId: "gmail-msg-race-observed",
+    }).run();
+
+    const outcome = await writeSourceLink(DB, {
+      receiptId: receiptY,
+      sourceId: gmailSourceId,
+      externalId: "gmail-msg-race-observed",
+    });
+
+    // K4 already proves the row itself never moves. This proves the
+    // *caller* is told that — not a silent `{ linked: true }` that would
+    // send noMerge() on to report a clean success for a link it never
+    // made (review round 2, finding 1).
+    expect(outcome.linked).toBe(false);
+    expect(outcome.boundTo).toBe(receiptX);
+
+    const row = await DB.prepare(`SELECT receipt_id FROM receipt_sources WHERE external_id = ?`)
+      .bind("gmail-msg-race-observed")
+      .first<{ receipt_id: string }>();
+    expect(row?.receipt_id).toBe(receiptX);
+    expect(await countReceiptSources(receiptY)).toBe(0);
   });
 });
