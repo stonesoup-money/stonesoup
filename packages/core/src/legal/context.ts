@@ -20,12 +20,14 @@ import {
  *
  * There is deliberately no "hosted deletion mechanism" placeholder here.
  * Account/receipt deletion is not a per-deployment fact a human fills in
- * the way a jurisdiction is — it is a feature that does not exist in this
- * codebase at all yet (STON-18: the schema's FK graph is RESTRICT-only,
- * with no delete path for any table, hosted or self-hosted). A
- * placeholder here would read as "fill in your mechanism", misrepresenting
- * an unbuilt feature as a deployment detail; privacy.ts instead states the
- * "nothing exists yet" fact directly (review round 1, finding 4).
+ * the way a jurisdiction is — it is a feature with no route or screen
+ * that reaches it yet, hosted or self-hosted (STON-18 built the ordered,
+ * child-first delete primitive at `packages/worker/src/receipts/delete.ts`,
+ * tested but uncalled by anything; wiring it to an authenticated route is
+ * STON-24). A placeholder here would read as "fill in your mechanism",
+ * misrepresenting an unbuilt feature as a deployment detail; privacy.ts
+ * instead states the "no route reaches it yet" fact directly (review
+ * round 1, finding 4).
  */
 
 export type DeploymentMode = "self-hosted" | "hosted";
