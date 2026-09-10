@@ -52,10 +52,17 @@
 -- already recorded the hard way about `recursive_triggers`.
 -- `defer_foreign_keys` is scoped to the current transaction and resets to
 -- its default on its own once that transaction commits — nothing here
--- has to re-enable it. `PRAGMA foreign_key_check` at the end re-validates
--- the whole FK graph before that commit, so a mistake in the rebuild
--- (a dropped column a child still implicitly depended on, say) surfaces
--- here rather than silently.
+-- has to re-enable it. `PRAGMA foreign_key_check` at the end returns a
+-- result set of violations, if any — it does not raise and does not abort
+-- the transaction, so on its own it is a diagnostic a human running
+-- `wrangler d1 migrations apply` can eyeball, not a gate (a mistake in the
+-- rebuild would commit exactly as quietly as without this line). The real
+-- guard is `packages/worker/src/schema.test.ts`'s "migration 0002 leaves
+-- the FK graph intact" block: it asserts `foreign_key_check` returns zero
+-- rows and that `foreign_key_list` on both `line_items` and
+-- `receipt_sources` still resolves to the rebuilt `receipts` table, after
+-- applying this migration through both paths this file is proved against
+-- below.
 --
 -- Proved against both application paths this migration must work under
 -- (STON-2's binding requirement): `test/apply-migrations.ts` /

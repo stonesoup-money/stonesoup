@@ -857,4 +857,55 @@ describe("receipts.merchant_raw is write-once-from-NULL (migration 0002)", () =>
     expect(names).toContain("idx_receipts_merchant_date_total");
     expect(names).toContain("idx_receipts_purchased_at");
   });
+
+  it("migration 0002 leaves the FK graph intact: foreign_key_check is empty and children still resolve to the rebuilt receipts table", async () => {
+    // `PRAGMA foreign_key_check` never raises or aborts on its own (this
+    // migration's header used to claim otherwise) — this test is the real
+    // guard the header now points to: a mistake in the table-rebuild
+    // procedure (a dropped column a child implicitly depended on, a
+    // forgotten index or trigger) would show up here.
+    const violations = await DB.prepare(`PRAGMA foreign_key_check`).all();
+    expect(violations.results).toHaveLength(0);
+
+    const lineItemsFks = await DB.prepare(`PRAGMA foreign_key_list(line_items)`).all<{
+      table: string;
+      from: string;
+      to: string;
+    }>();
+    expect(lineItemsFks.results).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ table: "receipts", from: "receipt_id", to: "id" }),
+      ]),
+    );
+
+    const receiptSourcesFks = await DB.prepare(`PRAGMA foreign_key_list(receipt_sources)`).all<{
+      table: string;
+      from: string;
+      to: string;
+    }>();
+    expect(receiptSourcesFks.results).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ table: "receipts", from: "receipt_id", to: "id" }),
+      ]),
+    );
+
+    // And the rebuilt table's FK enforcement is live, not just declared —
+    // a receipt referenced by an existing line_items row still can't be
+    // deleted (RESTRICT), proving the child's FK resolves to a real,
+    // enforced parent after the rebuild.
+    const receiptId = crypto.randomUUID();
+    await DB.prepare(
+      `INSERT INTO receipts (id, merchant_raw, status) VALUES (?, 'FK CHECK MART', 'extracted')`,
+    )
+      .bind(receiptId)
+      .run();
+    await DB.prepare(
+      `INSERT INTO line_items (id, receipt_id, raw_text, taxonomy_version) VALUES (?, ?, 'FK CHECK ITEM', '0.1.0')`,
+    )
+      .bind(crypto.randomUUID(), receiptId)
+      .run();
+    await expect(
+      DB.prepare(`DELETE FROM receipts WHERE id = ?`).bind(receiptId).run(),
+    ).rejects.toThrow();
+  });
 });

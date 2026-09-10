@@ -27,6 +27,16 @@ export function UploadForm({ onSettled }: { onSettled?: () => void } = {}) {
 
   const pollStatus = useCallback(
     (receiptId: string) => {
+      // A second upload while the first is still polling would otherwise
+      // overwrite `pollHandle.current` without clearing the first interval,
+      // leaking it — it keeps ticking forever, calling `setStatus` with the
+      // *old* receipt's status and racing the new poll. Clearing whatever
+      // is already running before starting a new one fixes both that leak
+      // and the unmount cleanup only ever clearing the most recent handle.
+      if (pollHandle.current) {
+        clearInterval(pollHandle.current);
+        pollHandle.current = null;
+      }
       pollHandle.current = setInterval(async () => {
         try {
           const result = await fetchReceiptStatus(receiptId);

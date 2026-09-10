@@ -118,18 +118,28 @@ describe("writeVerdict — golden_set write path (Review invariant 3, 16)", () =
     expect(goldenSet?.corrected_category).toBe("pantry");
   });
 
-  it("a skipped verdict writes no golden_set row and leaves the line item's category untouched", async () => {
+  it("a skipped verdict writes a golden_set row (verdict 'skipped') and leaves the line item's category untouched", async () => {
+    // AGENTS.md's golden_set.verdict CHECK includes 'skipped'; /data-promise's
+    // "a skipped item is never sent" is a submission-boundary constraint, not
+    // a local-write one — see the module header on writeVerdict.
     const { queueId, lineItemId } = await seedReviewItem({ category: "produce" });
     const labeler = `labeler-${crypto.randomUUID()}`;
     const outcome = await writeVerdict(DB, { queueId, verdict: "skipped", labeler });
-    expect(outcome).toEqual({ ok: true, goldenSetWritten: false });
+    expect(outcome).toEqual({ ok: true, goldenSetWritten: true });
 
-    const goldenSetCount = await DB.prepare(
-      `SELECT COUNT(*) as c FROM golden_set WHERE labeler = ?`,
+    const goldenSetRows = await DB.prepare(
+      `SELECT verdict, corrected_category, corrected_subcategory FROM golden_set WHERE labeler = ?`,
     )
       .bind(labeler)
-      .first<{ c: number }>();
-    expect(goldenSetCount?.c).toBe(0);
+      .all<{
+        verdict: string;
+        corrected_category: string | null;
+        corrected_subcategory: string | null;
+      }>();
+    expect(goldenSetRows.results).toHaveLength(1);
+    expect(goldenSetRows.results[0]?.verdict).toBe("skipped");
+    expect(goldenSetRows.results[0]?.corrected_category).toBeNull();
+    expect(goldenSetRows.results[0]?.corrected_subcategory).toBeNull();
 
     const queueRow = await DB.prepare(`SELECT verdict, resolved_at FROM review_queue WHERE id = ?`)
       .bind(queueId)
@@ -141,17 +151,55 @@ describe("writeVerdict — golden_set write path (Review invariant 3, 16)", () =
       .bind(lineItemId)
       .first<{ category: string; status: string }>();
     expect(lineItem?.category).toBe("produce");
+    expect(lineItem?.status).toBe("pending_review");
   });
 
-  it("replaying a verdict yields exactly one golden_set row", async () => {
+  it("replaying an identical verdict yields exactly one golden_set row", async () => {
     const { queueId } = await seedReviewItem();
     await writeVerdict(DB, { queueId, verdict: "confirmed", labeler: "labeler-replay" });
-    await writeVerdict(DB, { queueId, verdict: "confirmed", labeler: "labeler-replay" });
+    const second = await writeVerdict(DB, {
+      queueId,
+      verdict: "confirmed",
+      labeler: "labeler-replay",
+    });
+    expect(second).toEqual({ ok: false, error: "already-resolved" });
 
     const count = await DB.prepare(
       `SELECT COUNT(*) as c FROM golden_set WHERE labeler = 'labeler-replay'`,
     ).first<{ c: number }>();
     expect(count?.c).toBe(1);
+  });
+
+  it("a differing second verdict on an already-resolved row (S then Y) is rejected, writes no second golden_set row, and does not rewrite line_items (invariant 16)", async () => {
+    const { queueId, lineItemId } = await seedReviewItem({ category: "produce" });
+    const labeler = `labeler-${crypto.randomUUID()}`;
+
+    // S — skip.
+    const first = await writeVerdict(DB, { queueId, verdict: "skipped", labeler });
+    expect(first).toEqual({ ok: true, goldenSetWritten: true });
+
+    // Y — a differing verdict (confirm) on the now-resolved row.
+    const second = await writeVerdict(DB, { queueId, verdict: "confirmed", labeler });
+    expect(second).toEqual({ ok: false, error: "already-resolved" });
+
+    const goldenSetRows = await DB.prepare(`SELECT verdict FROM golden_set WHERE labeler = ?`)
+      .bind(labeler)
+      .all<{ verdict: string }>();
+    expect(goldenSetRows.results).toHaveLength(1);
+    expect(goldenSetRows.results[0]?.verdict).toBe("skipped");
+
+    const queueRow = await DB.prepare(`SELECT verdict FROM review_queue WHERE id = ?`)
+      .bind(queueId)
+      .first<{ verdict: string }>();
+    expect(queueRow?.verdict).toBe("skipped");
+
+    const lineItem = await DB.prepare(`SELECT status, category FROM line_items WHERE id = ?`)
+      .bind(lineItemId)
+      .first<{ status: string; category: string }>();
+    // Before this fix, the unguarded line_items UPDATE would have set
+    // status = 'confirmed' here with no matching golden_set row.
+    expect(lineItem?.status).toBe("pending_review");
+    expect(lineItem?.category).toBe("produce");
   });
 
   it("returns not-found for an unknown queueId", async () => {
@@ -161,5 +209,39 @@ describe("writeVerdict — golden_set write path (Review invariant 3, 16)", () =
       labeler: "labeler-abc",
     });
     expect(outcome).toEqual({ ok: false, error: "not-found" });
+  });
+
+  it("rejects an invalid correctedSubcategory instead of silently discarding it", async () => {
+    const { queueId } = await seedReviewItem({ category: "pantry" });
+    const outcome = await writeVerdict(DB, {
+      queueId,
+      verdict: "corrected",
+      correctedCategory: "pantry",
+      correctedSubcategory: "not-a-real-subcategory",
+      labeler: "labeler-bad-subcategory",
+    });
+    expect(outcome).toEqual({ ok: false, error: "invalid-corrected-subcategory" });
+
+    const goldenSetCount = await DB.prepare(
+      `SELECT COUNT(*) as c FROM golden_set WHERE labeler = 'labeler-bad-subcategory'`,
+    ).first<{ c: number }>();
+    expect(goldenSetCount?.c).toBe(0);
+  });
+
+  it("accepts a valid correctedSubcategory", async () => {
+    const { queueId, lineItemId } = await seedReviewItem({ category: "pantry" });
+    const outcome = await writeVerdict(DB, {
+      queueId,
+      verdict: "corrected",
+      correctedCategory: "pantry",
+      correctedSubcategory: "grains-pasta",
+      labeler: "labeler-good-subcategory",
+    });
+    expect(outcome).toEqual({ ok: true, goldenSetWritten: true });
+
+    const lineItem = await DB.prepare(`SELECT subcategory FROM line_items WHERE id = ?`)
+      .bind(lineItemId)
+      .first<{ subcategory: string }>();
+    expect(lineItem?.subcategory).toBe("grains-pasta");
   });
 });

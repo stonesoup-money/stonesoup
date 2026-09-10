@@ -21,6 +21,10 @@ export interface ReviewCardProps {
   onConfirm: () => void;
   onOpenPicker: () => void;
   onSkip: () => void;
+  /** Attached to the "N — Correct" button so the keyboard-opened picker
+   * (`CategoryPicker.tsx`'s `restoreFocusRef`) can return focus here on
+   * close, the same place it already lands when this button opens it. */
+  correctButtonRef?: React.RefObject<HTMLButtonElement | null>;
 }
 
 const REASON_LABELS: Record<string, string> = {
@@ -29,7 +33,14 @@ const REASON_LABELS: Record<string, string> = {
   bootstrap: "Needs a first look",
 };
 
-export function ReviewCard({ item, advancing, onConfirm, onOpenPicker, onSkip }: ReviewCardProps) {
+export function ReviewCard({
+  item,
+  advancing,
+  onConfirm,
+  onOpenPicker,
+  onSkip,
+  correctButtonRef,
+}: ReviewCardProps) {
   return (
     <div className={`review-card${advancing ? " review-card--advancing" : ""}`}>
       <div className="review-card__perforation" aria-hidden="true" />
@@ -59,6 +70,7 @@ export function ReviewCard({ item, advancing, onConfirm, onOpenPicker, onSkip }:
           Y — Confirm
         </button>
         <button
+          ref={correctButtonRef}
           type="button"
           className="review-card__button review-card__button--correct"
           onClick={onOpenPicker}

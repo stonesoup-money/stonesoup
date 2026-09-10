@@ -96,8 +96,19 @@ receiptsRoutes.post("/", async (c) => {
 });
 
 /** `GET /api/receipts/:id` — status poll for `UploadForm.tsx`. Read-only,
- * scoped to the fields a poller needs (status only — not the full row). */
+ * scoped to the fields a poller needs (status only — not the full row).
+ *
+ * `getSessionUser` is called here so a real caller exists at this call
+ * site, but `receipts` has no `user_id` column to filter on — the only
+ * place a receipt's owner is recorded today is the R2 key
+ * (`{userId}/{yyyy}/{mm}/{receiptUuid}`), which this query never reads.
+ * So any receipt uuid from any future user currently returns its status.
+ * STON-4 owns adding the real ownership check (a `user_id` column plus a
+ * `WHERE` clause here) once users are real — this comment, not silence,
+ * is the seam that should fail loudly when that lands and someone forgets
+ * to wire it in. */
 receiptsRoutes.get("/:id", async (c) => {
+  getSessionUser(c);
   const receiptId = c.req.param("id");
   const row = await c.env.DB.prepare(`SELECT status FROM receipts WHERE id = ?`)
     .bind(receiptId)

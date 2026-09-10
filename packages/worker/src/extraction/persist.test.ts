@@ -134,3 +134,81 @@ describe("persistExtraction — linkOrMerge runs before line items are written",
     expect(outcome.lineItemsWritten).toBe(1);
   });
 });
+
+describe("persistExtraction — CONFIDENCE_FLOOR=0 is a real lever setting, not silently ignored", () => {
+  it("routes a mid-confidence item as low_confidence under the default floor, but not when CONFIDENCE_FLOOR is explicitly '0'", async () => {
+    // `Number(env.CONFIDENCE_FLOOR) || CONFIDENCE_FLOOR_DEFAULT` would
+    // coerce an explicit "0" (a legitimate "never route on confidence
+    // alone" setting) back to the 0.85 default, since 0 is falsy.
+    await ensurePhotoSource("confidence-floor-default-user");
+    const defaultFloorReceiptId = crypto.randomUUID();
+    await DB.prepare(`INSERT INTO receipts (id, status) VALUES (?, 'pending')`)
+      .bind(defaultFloorReceiptId)
+      .run();
+
+    const midConfidenceResult = buildResult({
+      purchased_at: "2026-02-02",
+      total_cents: 500,
+      line_items: [
+        {
+          raw_text: "SYNTH ITEM",
+          normalized_name: "Synth Item",
+          qty: 1,
+          unit_price_cents: 500,
+          extended_price_cents: 500,
+          discount_cents: null,
+          category: "pantry",
+          subcategory: null,
+          confidence: 0.5,
+        },
+      ],
+    });
+
+    await persistExtraction(env, {
+      receiptId: defaultFloorReceiptId,
+      userId: "confidence-floor-default-user",
+      sourceType: "photo",
+      result: midConfidenceResult,
+      extractionModel: "fixture-model",
+      inputTokens: 1,
+      outputTokens: 1,
+    });
+
+    const defaultFloorReason = await DB.prepare(
+      `SELECT rq.reason FROM review_queue rq JOIN line_items li ON li.id = rq.line_item_id
+        WHERE li.receipt_id = ?`,
+    )
+      .bind(defaultFloorReceiptId)
+      .first<{ reason: string }>();
+    expect(defaultFloorReason?.reason).toBe("low_confidence");
+
+    // Same confidence, same checksum-passing totals, but this deployer has
+    // explicitly tuned CONFIDENCE_FLOOR down to 0.
+    await ensurePhotoSource("confidence-floor-zero-user");
+    const zeroFloorReceiptId = crypto.randomUUID();
+    await DB.prepare(`INSERT INTO receipts (id, status) VALUES (?, 'pending')`)
+      .bind(zeroFloorReceiptId)
+      .run();
+
+    await persistExtraction(
+      { ...env, CONFIDENCE_FLOOR: "0" },
+      {
+        receiptId: zeroFloorReceiptId,
+        userId: "confidence-floor-zero-user",
+        sourceType: "photo",
+        result: midConfidenceResult,
+        extractionModel: "fixture-model",
+        inputTokens: 1,
+        outputTokens: 1,
+      },
+    );
+
+    const zeroFloorReason = await DB.prepare(
+      `SELECT rq.reason FROM review_queue rq JOIN line_items li ON li.id = rq.line_item_id
+        WHERE li.receipt_id = ?`,
+    )
+      .bind(zeroFloorReceiptId)
+      .first<{ reason: string }>();
+    expect(zeroFloorReason?.reason).not.toBe("low_confidence");
+  });
+});

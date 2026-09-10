@@ -7,7 +7,7 @@
  */
 
 import { pickerCategorySlugs, TAXONOMY } from "@stonesoup/core";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { fetchNextReviewItems, type ReviewItem, submitVerdict } from "../api/client.js";
 import { CategoryPicker } from "./CategoryPicker.js";
 import "./review.css";
@@ -21,12 +21,21 @@ const PICKER_SLUGS = pickerCategorySlugs({});
 const FULL_TAXONOMY_SLUGS = TAXONOMY.map((c) => c.slug);
 const ADVANCE_ANIMATION_MS = 160;
 
-export function ReviewDeck() {
+export interface ReviewDeckProps {
+  /** Bumped by `App.tsx` when an upload's poll reaches a terminal status,
+   * so the deck re-fetches without a manual page reload closing the
+   * tracer's end-to-end loop. */
+  reloadSignal?: unknown;
+}
+
+export function ReviewDeck({ reloadSignal }: ReviewDeckProps = {}) {
   const [items, setItems] = useState<ReviewItem[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [advancing, setAdvancing] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [pickerSlugs, setPickerSlugs] = useState<readonly string[]>(PICKER_SLUGS);
+  const correctButtonRef = useRef<HTMLButtonElement | null>(null);
 
   const load = useCallback(() => {
     fetchNextReviewItems()
@@ -35,8 +44,14 @@ export function ReviewDeck() {
   }, []);
 
   useEffect(() => {
+    // `reloadSignal` has no value read in the body above — it exists
+    // purely to force this effect to re-run when `App.tsx` bumps it after
+    // an upload's poll reaches a terminal status. `void` documents that
+    // as a deliberate dependency, not a mistaken one useExhaustiveDependencies
+    // would otherwise report as unnecessary.
+    void reloadSignal;
     load();
-  }, [load]);
+  }, [load, reloadSignal]);
 
   const current = items && items.length > 0 ? items[0] : undefined;
 
@@ -52,29 +67,58 @@ export function ReviewDeck() {
     advanceTo((prev) => prev.slice(1));
   }, [advanceTo]);
 
+  // No in-flight guard here previously meant a second keypress in the
+  // window between the POST firing and `dropCurrent`'s `ADVANCE_ANIMATION_MS`
+  // advance would submit a second verdict for the same `queueId` (`current`
+  // does not change until the advance completes) — e.g. `S` then `Y`, the
+  // input that reaches the golden-set gap guarded against server-side in
+  // `verdict.ts`. `submitting` gates every entry point: the keyboard
+  // handlers below via `useReviewKeys`'s `enabled`, and the card's button
+  // `onClick`s via the early return in each handler.
   const handleConfirm = useCallback(() => {
-    if (!current) return;
+    if (!current || submitting) return;
+    setSubmitting(true);
     submitVerdict(current.queueId, { verdict: "confirmed" })
-      .then(dropCurrent)
-      .catch((err: Error) => setError(err.message));
-  }, [current, dropCurrent]);
+      .then(() => {
+        setSubmitting(false);
+        dropCurrent();
+      })
+      .catch((err: Error) => {
+        setSubmitting(false);
+        setError(err.message);
+      });
+  }, [current, submitting, dropCurrent]);
 
   const handleSkip = useCallback(() => {
-    if (!current) return;
+    if (!current || submitting) return;
+    setSubmitting(true);
     submitVerdict(current.queueId, { verdict: "skipped" })
-      .then(dropCurrent)
-      .catch((err: Error) => setError(err.message));
-  }, [current, dropCurrent]);
+      .then(() => {
+        setSubmitting(false);
+        dropCurrent();
+      })
+      .catch((err: Error) => {
+        setSubmitting(false);
+        setError(err.message);
+      });
+  }, [current, submitting, dropCurrent]);
 
   const handleCorrect = useCallback(
     (categorySlug: string) => {
-      if (!current) return;
+      if (!current || submitting) return;
+      setSubmitting(true);
       setPickerOpen(false);
       submitVerdict(current.queueId, { verdict: "corrected", correctedCategory: categorySlug })
-        .then(dropCurrent)
-        .catch((err: Error) => setError(err.message));
+        .then(() => {
+          setSubmitting(false);
+          dropCurrent();
+        })
+        .catch((err: Error) => {
+          setSubmitting(false);
+          setError(err.message);
+        });
     },
-    [current, dropCurrent],
+    [current, submitting, dropCurrent],
   );
 
   const handleCorrectToIndex = useCallback(
@@ -98,14 +142,23 @@ export function ReviewDeck() {
   useReviewKeys(
     useMemo(
       () => ({
-        enabled: !!current && !pickerOpen,
+        enabled: !!current && !pickerOpen && !submitting,
         onConfirm: handleConfirm,
         onOpenPicker: openPicker,
         onCorrectToIndex: handleCorrectToIndex,
         onMore: openMore,
         onSkip: handleSkip,
       }),
-      [current, pickerOpen, handleConfirm, openPicker, handleCorrectToIndex, openMore, handleSkip],
+      [
+        current,
+        pickerOpen,
+        submitting,
+        handleConfirm,
+        openPicker,
+        handleCorrectToIndex,
+        openMore,
+        handleSkip,
+      ],
     ),
   );
 
@@ -141,12 +194,14 @@ export function ReviewDeck() {
         onConfirm={handleConfirm}
         onOpenPicker={openPicker}
         onSkip={handleSkip}
+        correctButtonRef={correctButtonRef}
       />
       <CategoryPicker
         open={pickerOpen}
         onOpenChange={setPickerOpen}
         slugs={pickerSlugs}
         onSelect={handleCorrect}
+        restoreFocusRef={correctButtonRef}
       />
     </div>
   );

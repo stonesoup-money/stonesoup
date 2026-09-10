@@ -127,7 +127,16 @@ export async function persistExtraction(
 
   let lineItemsWritten = 0;
   if (!linkResult.lineItemsAlreadyPresent) {
-    const confidenceFloor = Number(env.CONFIDENCE_FLOOR) || CONFIDENCE_FLOOR_DEFAULT;
+    // `Number(env.CONFIDENCE_FLOOR) || CONFIDENCE_FLOOR_DEFAULT` would
+    // silently discard a deployer setting the lever to exactly `0`
+    // ("never route on confidence alone" is a legitimate tuning) — `0` is
+    // falsy, so `||` would fall through to the default. Routing levers
+    // are env vars, manually tuned (AGENTS.md); a lever with a silently
+    // unreachable value isn't tunable.
+    const parsedConfidenceFloor = Number(env.CONFIDENCE_FLOOR);
+    const confidenceFloor = Number.isFinite(parsedConfidenceFloor)
+      ? parsedConfidenceFloor
+      : CONFIDENCE_FLOOR_DEFAULT;
     const statements: D1PreparedStatement[] = [];
 
     result.line_items.forEach((item, index) => {

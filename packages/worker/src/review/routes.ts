@@ -31,8 +31,17 @@ interface NextReviewRow {
  * `substr()`/`strftime()` in the ORDER BY (discards
  * `idx_receipts_purchased_at`) and never parsed with `new Date(...)`
  * anywhere in this request path.
+ *
+ * `getSessionUser` is called here so a real caller exists at this call
+ * site, but — like `GET /api/receipts/:id` (`receipts/upload.ts`) — the
+ * query below has nothing to filter on: `receipts` has no `user_id`
+ * column, so this returns every unresolved review item for every user.
+ * STON-4 owns adding the real ownership check once users are real; this
+ * comment is the seam that should fail loudly when that lands, rather
+ * than silently continuing to return everyone's rows.
  */
 reviewRoutes.get("/next", async (c) => {
+  getSessionUser(c);
   const limitParam = Number(c.req.query("limit"));
   const limit =
     Number.isInteger(limitParam) && limitParam > 0 ? Math.min(limitParam, 100) : DEFAULT_PAGE_SIZE;
@@ -100,6 +109,17 @@ reviewRoutes.post("/:queueId/verdict", async (c) => {
   if (!outcome.ok) {
     if (outcome.error === "not-found") {
       return c.json({ error: "no such review queue item" }, 404);
+    }
+    if (outcome.error === "already-resolved") {
+      return c.json({ error: "review queue item is already resolved" }, 409);
+    }
+    if (outcome.error === "invalid-corrected-subcategory") {
+      return c.json(
+        {
+          error: "correctedSubcategory is not a known taxonomy subcategory slug for that category",
+        },
+        400,
+      );
     }
     return c.json({ error: "correctedCategory is not a known taxonomy category slug" }, 400);
   }

@@ -87,4 +87,35 @@ describe("POST /api/review/:queueId/verdict", () => {
     });
     expect(res.status).toBe(400);
   });
+
+  it("409s a second, differing verdict on an already-resolved queue item", async () => {
+    const { queueId } = await seedReviewItem("2026-04-06");
+    const first = await SELF.fetch(`https://example.com/api/review/${queueId}/verdict`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ verdict: "skipped" }),
+    });
+    expect(first.status).toBe(200);
+
+    const second = await SELF.fetch(`https://example.com/api/review/${queueId}/verdict`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ verdict: "confirmed" }),
+    });
+    expect(second.status).toBe(409);
+  });
+
+  it("400s for an invalid correctedSubcategory instead of silently discarding it", async () => {
+    const { queueId } = await seedReviewItem("2026-04-07");
+    const res = await SELF.fetch(`https://example.com/api/review/${queueId}/verdict`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        verdict: "corrected",
+        correctedCategory: "pantry",
+        correctedSubcategory: "not-a-real-subcategory",
+      }),
+    });
+    expect(res.status).toBe(400);
+  });
 });

@@ -62,7 +62,7 @@ Stone Soup's whole reason to exist is a high-quality, honestly-collected labeled
 
 ## The local record
 
-When you review a line item and confirm or correct its category, this instance writes one row to its own \`golden_set\` table. That row is local — it is this instance's own review history and quality-control record, not the submission payload described below — and the table holds:
+When you review a line item and confirm, correct, or skip it, this instance writes one row to its own \`golden_set\` table. That row is local — it is this instance's own review history and quality-control record, not the submission payload described below — and the table holds:
 
 - **The raw line text**, exactly as printed on the receipt or in the order confirmation.
 - **Merchant type** — a category like "grocery" or "pharmacy", not the merchant's name ${UNBUILT_MARKER}: this instance does not classify merchants yet, so this column is always empty today.

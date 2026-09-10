@@ -1,4 +1,4 @@
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { ReviewItem } from "../api/client.js";
 import { ReviewDeck } from "./ReviewDeck.js";
@@ -62,5 +62,29 @@ describe("ReviewDeck", () => {
     expect(String(verdictCall[0])).toContain("q-a");
     const body = JSON.parse((verdictCall[1] as RequestInit).body as string);
     expect(body.verdict).toBe("confirmed");
+  });
+
+  it("Escape from a keyboard-opened picker returns focus to the Correct button, not <body>", async () => {
+    // CategoryPicker has no DialogTrigger — `N` opens it programmatically,
+    // so document.activeElement is <body> at the moment it opens, which is
+    // Radix's default close-focus target. `restoreFocusRef` (wired through
+    // ReviewDeck -> CategoryPicker -> dialog.tsx's onCloseAutoFocus) exists
+    // so Escape lands back on the "N — Correct" button instead, the same
+    // place clicking that button to open the picker would already restore
+    // to.
+    mockFetchSequence([ITEM_A]);
+    render(<ReviewDeck />);
+    await waitFor(() => expect(screen.getByText("RAW LINE A")).toBeInTheDocument());
+
+    const correctButton = screen.getByRole("button", { name: /N — Correct/i });
+    expect(document.activeElement).not.toBe(correctButton);
+
+    window.dispatchEvent(new KeyboardEvent("keydown", { key: "n" }));
+    await waitFor(() => expect(screen.getByRole("dialog")).toBeInTheDocument());
+
+    fireEvent.keyDown(document, { key: "Escape" });
+
+    await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+    await waitFor(() => expect(document.activeElement).toBe(correctButton));
   });
 });
