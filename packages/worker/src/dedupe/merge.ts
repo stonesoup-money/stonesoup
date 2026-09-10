@@ -121,21 +121,19 @@ export interface LinkOrMergeInput {
   sourceType: SourceType;
   /** Gmail message ID (or equivalent); `null` for the photo path.
    *
-   * PRECONDITION (caller's responsibility): this must not already be bound
-   * — via an existing `receipt_sources` row — to a receipt other than
-   * `receiptId`, unless the caller genuinely intends to move that link.
-   * `ensureSourceLinkStatement`'s `ON CONFLICT (external_id) ... DO UPDATE`
-   * re-points the existing row silently, on both the no-merge path and
-   * inside the merge batch: no error, `merged: false`,
-   * `refusedReason: null`. If that row was the other receipt's *only*
-   * `receipt_sources` link, that receipt is left with zero — and the
-   * unknown-provenance veto (`packages/core/src/dedupe.ts`) then refuses
-   * it as a merge candidate from then on, permanently. Not reachable in
-   * this ticket (no caller exists yet); STON-6, which will be the first
-   * real caller passing a non-null `externalId`, must guarantee this
-   * precondition itself (e.g. resolve its own idempotency lookup to the
-   * same `receiptId` before calling `linkOrMerge`) rather than discover it
-   * the hard way. */
+   * PRECONDITION, now enforced here (STON-19): if this is already bound —
+   * via an existing `receipt_sources` row — to a receipt other than
+   * `receiptId`, `linkOrMerge` refuses before writing anything, returning
+   * `refusedReason: "external-id-bound-to-other-receipt"` with
+   * `externalIdBoundTo` naming the holder. It never re-points the row —
+   * that would strand the holder's only source link and, via the
+   * unknown-provenance veto in `packages/core/src/dedupe.ts`, make it
+   * permanently unmergeable. A caller that hits this refusal should
+   * resolve its own idempotency lookup against `externalIdBoundTo` and
+   * re-drive the call with the matching `receiptId` — the normal Gmail
+   * re-sync case (STON-6) always finds `externalIdBoundTo` equal to the
+   * `receiptId` it already intended, and falls through unrefused (see
+   * merge.test.ts, block K, case 3). */
   externalId: string | null;
 }
 
@@ -156,8 +154,15 @@ export interface LinkOrMergeResult {
    * deleting a duplicate that already carries committed line items — the
    * dedupe path never deletes a `line_items` row, and never deletes a
    * receipt that has any (AGENTS.md, "Line items are written exactly
-   * once"). */
-  refusedReason: "duplicate-has-line-items" | null;
+   * once") — or when the incoming `externalId` is already bound to a
+   * different receipt (STON-19), in which case `externalIdBoundTo` names
+   * the holder. */
+  refusedReason: "duplicate-has-line-items" | "external-id-bound-to-other-receipt" | null;
+  /** The `receipts.id` that already holds `input.externalId`'s
+   * `receipt_sources` link. Populated only when `refusedReason` is
+   * `"external-id-bound-to-other-receipt"`; `null` on every other path,
+   * including every success. */
+  externalIdBoundTo: string | null;
 }
 
 interface ReceiptRow {
@@ -188,12 +193,27 @@ async function lineItemCount(db: D1Database, receiptId: string): Promise<number>
  *   - `external_id` present (email): `ON CONFLICT (external_id) ...
  *     DO UPDATE` re-points a Gmail re-sync's row instead of erroring on
  *     the unique index — never the banned REPLACE-based upsert (AGENTS.md,
- *     Data conventions #8).
+ *     Data conventions #8). The `DO UPDATE`'s own `WHERE` restricts it to
+ *     the case where the conflicting row already belongs to this same
+ *     `receiptId` (STON-19): `linkOrMerge`'s guard is the primary defense
+ *     against moving another receipt's link, but D1 has no interactive
+ *     transactions, so that check-then-write has a race window; this
+ *     `WHERE` makes the statement itself structurally incapable of moving
+ *     a link regardless — when it doesn't match, the upsert is a silent
+ *     no-op (link not made) rather than a steal. `receipt_id =
+ *     excluded.receipt_id` in the `SET` list is consequently always a
+ *     no-op too; it is kept only so the statement still reads as an
+ *     upsert — do not read it as redundant with the `WHERE` and remove
+ *     either.
  *   - `external_id` NULL (photo): the partial unique index never applies,
  *     so an `INSERT ... SELECT ... WHERE NOT EXISTS (...)` guard is used
  *     instead of anything REPLACE-shaped.
+ *
+ * Exported (marked internal) so the race case above can be proven
+ * directly against real D1 in merge.test.ts rather than against a copy of
+ * this SQL.
  */
-function ensureSourceLinkStatement(
+export function ensureSourceLinkStatement(
   db: D1Database,
   args: { receiptId: string; sourceId: string; externalId: string | null },
 ): D1PreparedStatement {
@@ -205,7 +225,8 @@ function ensureSourceLinkStatement(
         `INSERT INTO receipt_sources (id, receipt_id, source_id, external_id, ingested_at)
          VALUES (?, ?, ?, ?, ?)
          ON CONFLICT (external_id) WHERE external_id IS NOT NULL
-         DO UPDATE SET receipt_id = excluded.receipt_id, ingested_at = excluded.ingested_at`,
+         DO UPDATE SET receipt_id = excluded.receipt_id, ingested_at = excluded.ingested_at
+           WHERE receipt_sources.receipt_id = excluded.receipt_id`,
       )
       .bind(id, args.receiptId, args.sourceId, args.externalId, ingestedAt);
   }
@@ -227,7 +248,15 @@ function ensureSourceLinkStatement(
  * No merge, or an ambiguous/refused one, always still links the incoming
  * source to its own `receiptId` — a receipt that doesn't merge is not
  * abandoned, it just stays a standing receipt with its own source link,
- * same as if dedupe didn't exist.
+ * same as if dedupe didn't exist — with exactly one exception (STON-19):
+ * a refusal because `externalId` is already bound to a different receipt
+ * links nothing, since writing the link is the exact write being refused.
+ * The incoming receipt is left with zero `receipt_sources` rows of its
+ * own in that case, and so is itself unmergeable (unknown-provenance
+ * veto, `packages/core/src/dedupe.ts`) until a caller re-drives the call
+ * correctly. That is the accepted trade-off — a visible, recoverable
+ * duplicate beats the permanently stranded receipt this ticket exists to
+ * prevent — do not "fix" it by linking anyway.
  */
 export async function linkOrMerge(
   db: D1Database,
@@ -239,6 +268,31 @@ export async function linkOrMerge(
     .first<ReceiptRow>();
   if (!incomingRow) {
     throw new Error(`linkOrMerge: receipts row ${input.receiptId} does not exist`);
+  }
+
+  // STON-19 guard: refuse before any write, and before the candidate
+  // query, when input.externalId is already bound to a different
+  // receipt. Placing this ahead of the candidate query is load-bearing —
+  // the steal this guards against exists on both the no-merge path
+  // (ensureSourceLinkStatement below) and inside the merge batch
+  // (statement 2), so the check must happen before either is reachable.
+  // A same-receipt binding is the normal Gmail re-sync and must fall
+  // through unrefused (merge.test.ts, block K, case 3).
+  if (input.externalId !== null) {
+    const existingLink = await db
+      .prepare(`SELECT receipt_id FROM receipt_sources WHERE external_id = ?`)
+      .bind(input.externalId)
+      .first<{ receipt_id: string }>();
+    if (existingLink && existingLink.receipt_id !== input.receiptId) {
+      return {
+        finalReceiptId: input.receiptId,
+        merged: false,
+        lineItemsAlreadyPresent: (await lineItemCount(db, input.receiptId)) > 0,
+        ambiguousMatchCount: null,
+        refusedReason: "external-id-bound-to-other-receipt",
+        externalIdBoundTo: existingLink.receipt_id,
+      };
+    }
   }
 
   const noMerge = async (
@@ -255,6 +309,7 @@ export async function linkOrMerge(
       lineItemsAlreadyPresent: (await lineItemCount(db, input.receiptId)) > 0,
       ambiguousMatchCount: extra.ambiguousMatchCount ?? null,
       refusedReason: extra.refusedReason ?? null,
+      externalIdBoundTo: null,
     };
   };
 
@@ -403,6 +458,7 @@ export async function linkOrMerge(
     lineItemsAlreadyPresent: (await lineItemCount(db, survivor.id)) > 0,
     ambiguousMatchCount: null,
     refusedReason: null,
+    externalIdBoundTo: null,
   };
 }
 
