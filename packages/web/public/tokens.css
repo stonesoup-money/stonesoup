@@ -1,0 +1,75 @@
+/*
+ * Stone Soup design tokens — canonical palette, type, and ledger-ruling
+ * primitives as plain CSS custom properties. No Tailwind, no shadcn, no
+ * build step: this file is served verbatim by the ASSETS binding (Vite
+ * copies `public/` to `dist/` unchanged) at `/tokens.css`, so the
+ * Worker-rendered public pages (packages/worker/src/public/pages.ts) can
+ * `<link>` it directly with zero JS, and the SPA links the identical
+ * file — one copy of the six hexes in the repo (STON-13/STON-2 ownership
+ * split, decisions.md). STON-2's Tailwind v4 `@theme` block should
+ * `@import` this file rather than redeclaring these values.
+ *
+ * AGENTS.md, Design language: paper/ink/ledger-blue/ledger-red/
+ * stamp-green/thermal-grey are canonical here now; AGENTS.md quotes this
+ * file instead of restating the hexes once this lands.
+ */
+
+@font-face {
+  font-family: "Bricolage Grotesque";
+  font-style: normal;
+  font-weight: 400 700;
+  font-display: swap;
+  src: url("/fonts/bricolage-grotesque-variable-latin.woff2") format("woff2");
+}
+
+@font-face {
+  font-family: "Spline Sans Mono";
+  font-style: normal;
+  font-weight: 400 700;
+  font-display: swap;
+  src: url("/fonts/spline-sans-mono-variable-latin.woff2") format("woff2");
+}
+
+:root {
+  /* Palette — light (the brief's canonical values). */
+  --color-paper: #fcfcf9;
+  --color-ink: #1a1a17;
+  --color-ledger-blue: #b9ccdd;
+  --color-ledger-red: #b3392e;
+  --color-stamp-green: #3e6b4f;
+  --color-thermal-grey: #6e6e66;
+
+  /* Type. Bricolage Grotesque for display/UI; Spline Sans Mono for every
+   * raw receipt string and money figure (AGENTS.md, Design language).
+   * Both are self-hosted (see @font-face above, latin subset only) —
+   * never a third-party font CDN on these pages. */
+  --font-display:
+    "Bricolage Grotesque", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono:
+    "Spline Sans Mono", ui-monospace, "SF Mono", "Cascadia Mono", Menlo, Consolas, monospace;
+
+  /* Ledger ruling primitives — the layout grammar (AGENTS.md, Design
+   * language: "horizontal hairlines for rows, one red vertical margin
+   * rule as the attention device"). Ledger blue is structural ruling
+   * only, never text. */
+  --rule-hairline: 1px solid var(--color-ledger-blue);
+  --rule-margin: 3px solid var(--color-ledger-red);
+}
+
+/* Dark mode is required (AGENTS.md: "evening phone review is a primary
+ * context, not an accessibility afterthought"). The brief states only
+ * the light palette; these dark values are a STON-13 derivation that
+ * preserves each color's hue and role (ledger blue stays a cool
+ * structural ruling color, ledger red stays the one accent, stamp green
+ * stays the confirmed-verdict color) while meeting contrast against a
+ * dark paper. Revisit if a future ticket supplies explicit dark hexes. */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --color-paper: #17181b;
+    --color-ink: #f2f1ec;
+    --color-ledger-blue: #5d7590;
+    --color-ledger-red: #e2594b;
+    --color-stamp-green: #5c9373;
+    --color-thermal-grey: #9b9b92;
+  }
+}

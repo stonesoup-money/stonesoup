@@ -1,6 +1,7 @@
 import { DEFAULT_EXTRACTION_MODEL } from "@stonesoup/core";
 import { Hono } from "hono";
 import { validateAnthropicKey } from "./byok/validate.js";
+import { publicPages } from "./public/pages.js";
 
 /**
  * Single deployable: this Worker serves the API under /api/* (and, in
@@ -12,6 +13,13 @@ import { validateAnthropicKey } from "./byok/validate.js";
 const app = new Hono<{ Bindings: Env }>();
 
 app.get("/api/health", (c) => c.json({ ok: true }));
+
+// Public, unauthenticated legal pages: /privacy, /terms, /data-promise.
+// Deliberately mounted with no auth middleware — Google's OAuth consent
+// screen (and a self-hoster's own) fetches the privacy policy URL with no
+// login, and STON-4 must not wrap these routes in session middleware
+// later (AGENTS.md, "Public pages and the privacy policy").
+app.route("/", publicPages);
 
 // BYOK status — format + model checks only (no live extraction call) on a
 // routine poll. Onboarding wires a `runTestMessage` call in STON-5.

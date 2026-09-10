@@ -208,12 +208,15 @@ warm-startup styling.
 
 - Palette: paper `#FCFCF9` · ink `#1A1A17` · ledger-rule blue
   `#B9CCDD` · ledger red `#B3392E` · stamp green `#3E6B4F` · thermal
-  grey `#6E6E66`. These six hexes are canonical **today** — there is
-  no token stylesheet yet. Once one lands (STON-2), *it* becomes
-  canonical and this file quotes it instead of restating the values,
-  so there is one copy to keep current. Until then, this list is
-  exempt from the "no inline hex in a component" rule below; nowhere
-  else in the codebase is.
+  grey `#6E6E66`. **`packages/web/public/tokens.css` is now canonical**
+  (STON-13) — plain CSS custom properties, no Tailwind, no shadcn, so
+  the server-rendered public pages can use it with no build step. This
+  list is the same six values, quoted here for readability, not a
+  second source of truth; STON-2's Tailwind v4 `@theme` block imports
+  `tokens.css` rather than restating them. Dark-mode overrides for all
+  six live in the same file under `prefers-color-scheme: dark` — the
+  brief states only the light values, so the dark palette is a STON-13
+  derivation, not a brief quote.
 - **Mobile-first, PWA-installable review inbox.** The review UI is
   designed for phone-in-hand first, desktop second — not built
   desktop-first and shrunk. No native app in v1.
@@ -337,6 +340,45 @@ warm-startup styling.
   supports drill-down to raw line text.
 - No third-party OCR services. The vision model does the whole
   receipt in one call.
+
+## Public pages and the privacy policy
+
+- `/privacy`, `/terms`, and `/data-promise` are server-rendered by the
+  Worker (`packages/worker/src/public/pages.ts`), not the SPA — real
+  HTML in the first byte, no JS, no auth. They must stay listed verbatim
+  in `wrangler.jsonc`'s `assets.run_worker_first`, or
+  `not_found_handling: "single-page-application"` silently serves the
+  SPA shell at those paths instead — the failure mode that would take
+  the OAuth-consent-screen launch blocker down with no visible error.
+  `scripts/verify-public-routes.mjs`, wired into `pnpm check`, is what
+  actually guards this; do not rely on the `SELF.fetch` test suite alone
+  to prove it (the Workers Vitest pool may not simulate
+  `run_worker_first` faithfully).
+- These three routes are **deliberately unauthenticated** and must
+  never sit behind session middleware — Google's OAuth consent screen
+  (and a self-hoster's own, registering their own Google app) fetches
+  the privacy policy URL with no login. STON-4 (auth) must exclude
+  `/privacy`, `/terms`, and `/data-promise` from whatever session
+  middleware it adds.
+- **Any ticket that changes what data is collected, retained, or
+  transmitted must update the relevant document**
+  (`packages/core/src/legal/privacy.ts` / `terms.ts` / `data-promise.ts`)
+  and `docs/privacy-claims.md` in the same PR — see review invariant
+  #24 below. Writing code that changes behaviour the policy describes,
+  without updating the policy, is not a follow-up task; it is the same
+  change, incomplete.
+- The document text is conditioned on `DEPLOYMENT_MODE`
+  (`"self-hosted"` | `"hosted"`, `wrangler.jsonc` var): a self-hosted
+  instance needs no legal entity and no jurisdiction and says exactly
+  that; the hosted fleet's `OPERATOR_NAME` / `OPERATOR_CONTACT` vars,
+  plus the inline jurisdiction/effective-date/deletion-mechanism
+  placeholders in `packages/core/src/legal/context.ts`, must never be
+  filled in with an invented value — an agent inventing a legal entity
+  name or jurisdiction is fabricating a legal document. Leave the
+  `[[...]]` placeholder in place; a human fills it in.
+- **The dataset publication pipeline stays gated** (see Human gates
+  below). `docs/dataset-publication.md` is its only deliverable in this
+  repository — prose, not code.
 
 ## Human gates
 
@@ -491,3 +533,15 @@ wins.
     an `ON DELETE RESTRICT` added for this without a stated reason; or
     `scripts/verify-no-replace.mjs` being dropped from `pnpm check` or
     having its scanned roots narrowed back to `packages/**` alone.
+24. **A behaviour change that outruns the privacy policy is a major
+    finding** — Public pages and the privacy policy, above. Trigger: a
+    change to what data is collected, retained, or transmitted (Gmail
+    scope, golden-set fields, retention, third parties, deletion) landing
+    without a matching update to `packages/core/src/legal/privacy.ts` /
+    `terms.ts` / `data-promise.ts` and `docs/privacy-claims.md` in the
+    same PR; a hosted-mode legal placeholder (`OPERATOR_NAME`,
+    `OPERATOR_CONTACT`, jurisdiction, effective date, deletion mechanism
+    in `packages/core/src/legal/context.ts`) filled in with an invented
+    value instead of left as `[[...]]`; `/privacy`, `/terms`, or
+    `/data-promise` moved behind auth or dropped from `wrangler.jsonc`'s
+    `assets.run_worker_first`.
