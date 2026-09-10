@@ -1,7 +1,18 @@
 -- Stone Soup — initial schema.
 --
--- This migration is the brief's data model made structurally unbreakable
--- rather than merely documented (AGENTS.md, Data conventions):
+-- This migration makes as much of the brief's data model structurally
+-- enforced as SQLite/D1 allow, rather than merely documented (AGENTS.md,
+-- Data conventions) — it is not a claim that every rule here is
+-- unbreakable at the database layer. Money shapes, date shapes, and
+-- raw-text immutability where a trigger can see the write (an UPDATE) are
+-- genuinely enforced by the database. `INSERT OR REPLACE` is the
+-- exception: it is DELETE+INSERT, invisible to a BEFORE UPDATE trigger,
+-- and D1 gives no way to tell its delete apart from a real one, so
+-- `golden_set` (unconditionally), and `line_items`/`receipts`/`sources`
+-- whenever the specific row being replaced happens to have nothing
+-- referencing it, have no DB-level defense against it at all — see part
+-- (b) below and `scripts/verify-no-replace.mjs`, which is what actually
+-- stops those cases.
 --   1. Money is INTEGER cents everywhere — every money column is `*_cents`,
 --      and a CHECK on each one rejects anything SQLite's INTEGER affinity
 --      would otherwise silently accept unconverted (e.g. a REAL like
@@ -40,14 +51,26 @@
 --      delete would otherwise cascade through — pragma-independent
 --      (verified: a cascade still ran with `recursive_triggers` off), so
 --      it fires in production exactly as it does in tests. It turns
---      `INSERT OR REPLACE INTO receipts` (or `sources`) into a loud FK
---      failure whenever the row has anything to lose, and leaves an
---      explicit path for a real delete feature later.
+--      `INSERT OR REPLACE INTO receipts` (or `sources`, or `line_items`
+--      when a `review_queue` row references it) into a loud FK failure
+--      whenever the row has children referencing it — not whenever it
+--      "has anything to lose" in general. A *childless* row has nothing
+--      for RESTRICT to attach to and is not protected by it at all: e.g.
+--      `INSERT OR REPLACE INTO receipts` on a receipt with no line items
+--      or receipt_sources still succeeds and silently rewrites its
+--      immutable `merchant_raw`, bypassing `receipts_merchant_raw_immutable`
+--      the same way it bypasses everything else REPLACE bypasses (lock-in
+--      test: `packages/worker/src/schema.test.ts`, "REPLACE on a childless
+--      receipts row"). This layer leaves an explicit path for a real
+--      delete feature later.
 --   b. `INSERT OR REPLACE` / `REPLACE INTO` is banned in application code
 --      by AGENTS.md and caught at author time by a grep gate in
 --      `pnpm check` (`scripts/verify-no-replace.mjs`) — the one thing that
---      actually stops it on `line_items` and `golden_set`, which have no
---      FK to restrict against.
+--      actually stops it on `line_items` (when nothing in `review_queue`
+--      references it) and `golden_set` (unconditionally: it has no FK to
+--      restrict against at all), and the only defense at all for a
+--      childless `receipts`/`sources` row's own immutable/idempotency
+--      data as in (a) above.
 -- See `packages/worker/src/schema.test.ts` for the reproduction against a
 -- real D1 binding.
 
@@ -239,10 +262,22 @@ END;
 -- review_queue — human review tasks for a line item, one row per surface.
 -- A resolved row's verdict is what triggers an immediate golden_set write
 -- (application-level, same step — AGENTS.md, House rules).
+--
+-- `line_item_id` is `ON DELETE RESTRICT`, not CASCADE (round 3 polish
+-- pass, extending review round 2, finding 3's fix to the fourth FK it
+-- missed) — CASCADE meant `INSERT OR REPLACE INTO line_items` silently
+-- deleted every review_queue row for that item, resolved verdicts
+-- included: verified out-of-harness, a `verdict = 'corrected'` row (real
+-- human labelling work, the product's stated point) went from 1 to 0 with
+-- no error. RESTRICT makes that REPLACE fail loudly instead, the same way
+-- it already does for receipts/sources/line_items' own receipt_id FK. A
+-- line_items row with no review_queue row referencing it is still
+-- unprotected by this — see the migration header and
+-- `scripts/verify-no-replace.mjs`, the only defense left in that case.
 -- ---------------------------------------------------------------------
 CREATE TABLE review_queue (
   id                    TEXT PRIMARY KEY,
-  line_item_id          TEXT NOT NULL REFERENCES line_items(id) ON DELETE CASCADE,
+  line_item_id          TEXT NOT NULL REFERENCES line_items(id) ON DELETE RESTRICT,
   reason                TEXT NOT NULL
                            CHECK (reason IN ('low_confidence', 'random_audit', 'novelty', 'user_flagged', 'checksum_fail', 'bootstrap')),
   verdict               TEXT CHECK (verdict IS NULL OR verdict IN ('confirmed', 'corrected', 'skipped')),

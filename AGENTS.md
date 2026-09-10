@@ -120,15 +120,21 @@ package) and no `packages/evals` until STON-12 gives it contents.
 8. **Never `INSERT OR REPLACE` / `REPLACE INTO`, anywhere, on any
    table.** `REPLACE` is DELETE+INSERT, not UPDATE — it bypasses every
    `BEFORE UPDATE` trigger (rule #3's raw-text guards included) and, on
-   `line_items` and `golden_set`, no FK or trigger can catch it either
-   (review round 2, finding 1 — D1 has no DB-level defense for those two
-   tables at all; the migration is honest about this in its header
-   comment). Use `ON CONFLICT (...) DO UPDATE SET ...` instead.
-   `receipts` and `sources` additionally get `ON DELETE RESTRICT` on
-   every FK a REPLACE-induced delete would otherwise cascade through, but
-   that is a second layer, not a substitute for not writing the
+   `golden_set` unconditionally, and on `receipts`/`sources`/`line_items`
+   whenever the specific row being replaced has nothing referencing it,
+   no FK or trigger can catch it either (review round 2, finding 1 — the
+   migration is honest about this in its header comment). Use
+   `ON CONFLICT (...) DO UPDATE SET ...` instead. `receipts`, `sources`,
+   and `line_items` additionally get `ON DELETE RESTRICT` on every FK a
+   REPLACE-induced delete would otherwise cascade through when the row
+   has children (or, for `line_items`, an open/resolved `review_queue`
+   row), but that is a second layer, not a substitute for not writing the
    statement — `scripts/verify-no-replace.mjs`, wired into `pnpm check`,
-   is what actually stops it, deterministically, at author time.
+   is what actually stops it, deterministically, at author time, and is
+   what defends the childless/unreferenced case regardless of table. That
+   script scans `packages/**`, `scripts/**`, `migrations/**`, and root
+   `test/**` — not application code alone, matching this rule's "anywhere,
+   on any table."
 
 ## Taxonomy
 
@@ -477,10 +483,11 @@ wins.
 22. **Auth stays hand-rolled and single-provider** — Auth, bullets
     1–2. Trigger: an auth library or SaaS, a second identity provider,
     or a session that is not the Hono-JWT cookie.
-23. **`INSERT OR REPLACE` / `REPLACE INTO` never appears in application
-    code** — Data conventions, #8. Trigger: the statement anywhere in
-    `packages/**` outside a `*.test.ts`/`*.test.tsx` file proving a
-    rejection or the absence of a DB-level guard; a schema change that
-    weakens or removes an `ON DELETE RESTRICT` added for this without a
-    stated reason; or `scripts/verify-no-replace.mjs` being dropped from
-    `pnpm check`.
+23. **`INSERT OR REPLACE` / `REPLACE INTO` never appears anywhere the
+    grep gate scans** — Data conventions, #8. Trigger: the statement in
+    `packages/**`, `scripts/**`, `migrations/**`, or root `test/**`
+    outside a `*.test.ts`/`*.test.tsx` file proving a rejection or the
+    absence of a DB-level guard; a schema change that weakens or removes
+    an `ON DELETE RESTRICT` added for this without a stated reason; or
+    `scripts/verify-no-replace.mjs` being dropped from `pnpm check` or
+    having its scanned roots narrowed back to `packages/**` alone.

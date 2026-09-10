@@ -68,7 +68,15 @@ for (const wranglerName of Object.keys(wranglerVars)) {
 
 // Every config.ts export that looks like a tunable must be accounted for
 // too — either paired or explicitly listed as intentionally unpaired.
-const exportNames = [...configSrc.matchAll(/export const ([A-Z][A-Z0-9_]*)\s*=/g)].map((m) => m[1]);
+// The type annotation is optional and, when present, skipped up to the `=`
+// (round 3 polish pass, finding 6): the old pattern required `=`
+// immediately after the name, so `export const NOVELTY_THRESHOLD: number
+// = 0.3;` was invisible to this loop entirely — neither paired nor
+// flagged as unpaired, reopening review round 2, finding 6 for exactly
+// the export shape it was meant to catch.
+const exportNames = [...configSrc.matchAll(/export const ([A-Z][A-Z0-9_]*)\s*(?::[^=]+)?=/g)].map(
+  (m) => m[1],
+);
 for (const name of exportNames) {
   if (PAIRS.some(([, c]) => c === name) || CORE_ONLY_EXPORTS.has(name)) continue;
   console.error(

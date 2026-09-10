@@ -118,3 +118,51 @@ describe("the INSERT OR REPLACE grep gate (review round 2, findings 1 and 5)", (
     expect(result.status).toBe(0);
   });
 });
+
+describe("whole-file matching, not line-by-line (round 3 polish pass, finding 4)", () => {
+  it("catches INSERT OR REPLACE split across multiple lines, which a line-by-line scan would miss", () => {
+    const result = runGate({
+      "repo.ts": "const sql = `INSERT\nOR\nREPLACE\nINTO line_items (id) VALUES (?)`;",
+    });
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toMatch(/repo\.ts:1/);
+  });
+});
+
+describe("the gate's scope covers more than packages/**/*.{ts,tsx} (round 3 polish pass, finding 3)", () => {
+  it("fails on a real INSERT OR REPLACE statement in a .sql fixture", () => {
+    const result = runGate({
+      "0002_backfill.sql": "INSERT OR REPLACE INTO golden_set (id) VALUES ('x');",
+    });
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toMatch(/0002_backfill\.sql:1/);
+  });
+
+  it("does not false-positive on a .sql `--` comment discussing the banned phrase in prose", () => {
+    const result = runGate({
+      "0001_initial_schema.sql": [
+        "-- INSERT OR REPLACE / REPLACE INTO is banned outright — see AGENTS.md.",
+        "CREATE TABLE receipts (id TEXT PRIMARY KEY);",
+      ].join("\n"),
+    });
+    expect(result.status).toBe(0);
+  });
+
+  it("still catches a real statement in a .sql file that also has an unrelated comment", () => {
+    const result = runGate({
+      "0002_backfill.sql": [
+        "-- backfilling a derived column, nothing REPLACE-related here",
+        "INSERT OR REPLACE INTO golden_set (id) VALUES ('x');",
+      ].join("\n"),
+    });
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toMatch(/0002_backfill\.sql:2/);
+  });
+
+  it("fails on a .mjs fixture too, not just .ts/.tsx", () => {
+    const result = runGate({
+      "backfill.mjs": "const sql = `REPLACE INTO line_items (id) VALUES (?)`;",
+    });
+    expect(result.status).not.toBe(0);
+  });
+});

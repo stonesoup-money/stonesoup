@@ -168,6 +168,42 @@ describe("INSERT OR REPLACE is stopped by ON DELETE RESTRICT where a row has chi
       .first<{ auth_state: string }>();
     expect(row?.auth_state).toBe("connected");
   });
+
+  // Round 3 polish pass: extends review round 2, finding 3's RESTRICT fix
+  // to the fourth FK it missed. review_queue.line_item_id was still
+  // ON DELETE CASCADE, so `INSERT OR REPLACE INTO line_items` silently
+  // deleted every review_queue row for that item — including a *resolved*
+  // one. That is human labelling work (the product's stated point) being
+  // destroyed by a routine upsert. This test fails against the old CASCADE
+  // FK: a `verdict = 'corrected'` review row went from 1 to 0 with no
+  // error.
+  it("blocks INSERT OR REPLACE on line_items when a resolved review_queue row still references it", async () => {
+    const reviewQueueId = crypto.randomUUID();
+    await DB.prepare(
+      `INSERT INTO review_queue (id, line_item_id, reason, verdict, resolved_at)
+       VALUES (?, ?, 'low_confidence', 'corrected', strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))`,
+    )
+      .bind(reviewQueueId, lineItemId)
+      .run();
+
+    await expect(
+      DB.prepare(
+        `INSERT OR REPLACE INTO line_items (id, receipt_id, raw_text, taxonomy_version) VALUES (?, ?, 'REWRITTEN', '0.1.0')`,
+      )
+        .bind(lineItemId, receiptId)
+        .run(),
+    ).rejects.toThrow();
+
+    const row = await DB.prepare(`SELECT verdict FROM review_queue WHERE id = ?`)
+      .bind(reviewQueueId)
+      .first<{ verdict: string }>();
+    expect(row?.verdict).toBe("corrected");
+
+    const lineItem = await DB.prepare(`SELECT raw_text FROM line_items WHERE id = ?`)
+      .bind(lineItemId)
+      .first<{ raw_text: string }>();
+    expect(lineItem?.raw_text).toBe("ORG BANANAS  1.24 LB @ .79/LB");
+  });
 });
 
 // review round 2, finding 1: no FK and no trigger can protect line_items or
@@ -221,6 +257,39 @@ describe("INSERT OR REPLACE on line_items/golden_set has no DB-level guard — t
       .bind(id)
       .first<{ split: string }>();
     expect(row?.split).toBe("test");
+  });
+});
+
+// Round 3 polish pass, finding 2: `ON DELETE RESTRICT` only protects a row
+// that has children — it does nothing for a row's *own* immutable data
+// when nothing references it. There was a lock-in test above for the
+// childless-`sources` case ("still allows INSERT OR REPLACE on a source
+// with no receipt_sources referencing it") but none for `receipts` — the
+// one table whose immutable column (`merchant_raw`) is AGENTS.md's single
+// most important rule. This documents current real behaviour honestly,
+// the same way the line_items/golden_set block above does: a childless
+// receipt is defended only by scripts/verify-no-replace.mjs, not by the
+// database.
+describe("INSERT OR REPLACE on a childless receipts row has no DB-level guard either (round 3 polish pass, finding 2)", () => {
+  it("REPLACE on a receipt with no line_items or receipt_sources is NOT blocked at the DB layer — it silently rewrites merchant_raw", async () => {
+    const childlessReceiptId = crypto.randomUUID();
+    await DB.prepare(`INSERT INTO receipts (id, merchant_raw, total_cents) VALUES (?, ?, ?)`)
+      .bind(childlessReceiptId, "TRADER JOE'S #456", 4321)
+      .run();
+
+    await expect(
+      DB.prepare(
+        `INSERT OR REPLACE INTO receipts (id, merchant_raw, total_cents) VALUES (?, 'REWRITTEN MERCHANT', 9999)`,
+      )
+        .bind(childlessReceiptId)
+        .run(),
+    ).resolves.toBeDefined();
+
+    const row = await DB.prepare(`SELECT merchant_raw, total_cents FROM receipts WHERE id = ?`)
+      .bind(childlessReceiptId)
+      .first<{ merchant_raw: string; total_cents: number }>();
+    expect(row?.merchant_raw).toBe("REWRITTEN MERCHANT");
+    expect(row?.total_cents).toBe(9999);
   });
 });
 
