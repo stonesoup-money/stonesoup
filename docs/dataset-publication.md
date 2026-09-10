@@ -9,14 +9,15 @@ code" below).
 ## The three stages
 
 **Pot.** As users review and confirm or correct line-item categories,
-anonymized labels stream into a private, central submission database —
-one Worker, one table, receiving only what `docs/data-promise.md`
-describes (raw string, model guess, human verdict, and the small set of
-other fields listed there — never a receipt image, receipt id, user id,
-store, or purchase timestamp). This database is live and private. It is
-never the publication surface itself.
+anonymized labels would stream into a private, central submission
+database — one Worker, one table, receiving only what
+`docs/data-promise.md` describes (raw string, model guess, human verdict,
+and the small set of other fields listed there — never a receipt image,
+receipt id, user id, store, or purchase timestamp). **No such database
+exists**; when it does it is private, and it is never the publication
+surface itself.
 
-**Ladle.** Publication follows a fixed, public process that:
+**Ladle.** Publication would follow a fixed, public process that:
 
 1. pulls a batch of records from the pot;
 2. deduplicates them;
@@ -32,15 +33,21 @@ never the publication surface itself.
    distribution, taxonomy version coverage);
 7. emits a versioned JSONL file.
 
-The ladle is **public code**, published in the separate `open-receipts`
+**The ladle is not written — not here, and not in `open-receipts`.** When
+it is, it is **public code**, published in the separate `open-receipts`
 repository, with credentials excluded from that repository entirely. Its
 being public and auditable is itself part of the trust claim: anyone can
 read exactly what the release process does to the data before it
-publishes.
+publishes. Until then, `/data-promise` must not tell a reader that a
+second, server-side sensitive-string screen already re-checks what is
+published, or that the release code is auditable today — neither is true
+(review round 3, finding 2, which found this document contradicting
+itself between this paragraph and "Why this repo has none of this code"
+below).
 
-**Table.** A maintainer runs the ladle locally, on a monthly cadence.
-**Before every tagged release, that maintainer looks at a sample of what
-is about to be published.** This is not a v1-only safeguard scheduled for
+**Table.** A maintainer would run the ladle locally, on a monthly
+cadence. **Before every tagged release, that maintainer looks at a sample
+of what is about to be published.** This is not a v1-only safeguard scheduled for
 automation later — it is permanent, by design, for as long as Open
 Receipts exists (see AGENTS.md, Human gates: "the human sample review
 before every tagged release is permanent, not a v1 gate"). Only after

@@ -4,7 +4,9 @@ This is a self-hosted instance of Stone Soup. There is no service provider here 
 
 ## The label-contribution default
 
-Self-hosted deployments ship with golden-set contribution **on by default**, clearly disclosed here rather than left to a settings page nobody reads: the same anonymized labeling contribution design described at [/data-promise](/data-promise) applies to this instance too, unless you turn it off. **This submission path does not exist in this codebase yet** *(design — not yet built; see docs/privacy-claims.md)* — until it is built, no label is actually contributed by any path. This is disclosed, not hidden, because pretending otherwise in an open-source project would be theatre — anyone can read the source and see the default. To turn it off, set this instance's `GOLDEN_SET_CONTRIBUTION` configuration value to `"off"`; see [/data-promise](/data-promise) for exactly what is and is not included when it is on.
+Self-hosted deployments ship with golden-set contribution **on by default**, clearly disclosed here rather than left to a settings page nobody reads: the same anonymized labeling contribution design described at [/data-promise](/data-promise) applies to this instance too, unless you turn it off. **This submission path does not exist in this codebase yet** *(design — not yet built; see docs/privacy-claims.md)* — until it is built, no label is actually contributed by any path. This is disclosed, not hidden, because pretending otherwise in an open-source project would be theatre — anyone can read the source and see the default.
+
+To turn it off, set this instance's `GOLDEN_SET_CONTRIBUTION` configuration value to `"off"`. That variable is real — it is in this instance's `wrangler.jsonc` — but no code reads it yet *(design — not yet built; see docs/privacy-claims.md)*, because the submission path it would switch off does not exist. See [/data-promise](/data-promise) for exactly what is and is not included when it is on.
 
 ## License and warranty
 

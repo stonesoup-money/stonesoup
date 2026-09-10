@@ -234,6 +234,61 @@ describe('the rendered "It contains exactly:" list is bound to GOLDEN_SET_SUBMIS
     ).toEqual(GOLDEN_SET_SUBMISSION_ALLOWLIST);
   });
 
+  // Review round 2's fix bound the allowlist to the prose. Review round 3,
+  // finding 5, demonstrated the second route out: adding a column to
+  // GOLDEN_SET_SUBMISSION_PSEUDONYMIZED_COLUMNS — which, by the page's own
+  // model, means *a derived value does enter the payload* — passed 190/190
+  // with "It contains exactly:" untouched, because the extraction above
+  // deliberately skips every bullet mentioning "pseudonym" and nothing
+  // then checked what those bullets actually name. This asserts the
+  // pseudonymized set is bound to the prose the same way the allowlist is:
+  // every member must be named, in backticks, in a pseudonym bullet of that
+  // same list.
+  it("every pseudonymized column is named in a pseudonym bullet of the same list", () => {
+    const markdown = getLegalDocument("data-promise")?.markdown(DEFAULT_LEGAL_CONTEXT) ?? "";
+    const lines = markdown.split("\n");
+    const introIndex = lines.findIndex((line) => line.includes("It contains exactly:"));
+    expect(introIndex).toBeGreaterThan(-1);
+
+    const pseudonymBullets: string[] = [];
+    for (let i = introIndex + 1; i < lines.length; i++) {
+      const line = lines[i] ?? "";
+      if (line.startsWith("- ")) {
+        if (/pseudonym/i.test(line)) pseudonymBullets.push(line);
+        continue;
+      }
+      if (line.trim() === "") continue;
+      break;
+    }
+
+    const named = new Set<string>();
+    for (const bullet of pseudonymBullets) {
+      for (const match of bullet.matchAll(/`([a-zA-Z0-9_]+)`/g)) named.add(match[1] ?? "");
+    }
+
+    const unnamed = GOLDEN_SET_SUBMISSION_PSEUDONYMIZED_COLUMNS.filter(
+      (column) => !named.has(column),
+    );
+    expect(
+      unnamed,
+      `GOLDEN_SET_SUBMISSION_PSEUDONYMIZED_COLUMNS names ${unnamed.join(", ")}, which no ` +
+        'pseudonym bullet under "It contains exactly:" mentions. A pseudonymized column means a ' +
+        "value derived from it *does* enter the submission payload, so /data-promise must say so " +
+        "field by field — add a bullet naming it in backticks, or take the column out of the set.",
+    ).toEqual([]);
+
+    // And nothing may be named as a pseudonym in the prose that is not in
+    // the set — the reverse drift.
+    const notInSet = [...named].filter(
+      (column) => !GOLDEN_SET_SUBMISSION_PSEUDONYMIZED_COLUMNS.includes(column),
+    );
+    expect(
+      notInSet,
+      `the prose names ${notInSet.join(", ")} as pseudonymized, but ` +
+        "GOLDEN_SET_SUBMISSION_PSEUDONYMIZED_COLUMNS does not list it",
+    ).toEqual([]);
+  });
+
   it("the pseudonym bullet still names labeler and is excluded from the allowlist comparison above by content, not by hardcoding", () => {
     const markdown = getLegalDocument("data-promise")?.markdown(DEFAULT_LEGAL_CONTEXT) ?? "";
     const lines = markdown.split("\n");

@@ -30,6 +30,23 @@ import {
 
 export type DeploymentMode = "self-hosted" | "hosted";
 
+/**
+ * The one marker string every unbuilt-capability claim on the public
+ * pages carries, exported so the prose templates, the claims-coverage
+ * test, and any future document all use identical bytes rather than
+ * hand-typed near-copies (three review rounds found unmarked claims; a
+ * marker nobody can typo is part of closing that).
+ *
+ * Rule, enforced by packages/web/src/legal-claim-coverage.test.ts: every
+ * rendered block whose claim row in `docs/privacy-claims.md` carries
+ * `required` in the Marker column must contain this exact string. A
+ * *restrictive* claim ("only allowlisted mail is fetched") is true while
+ * nothing runs and does not take the marker; an *affirmative existence*
+ * claim ("this instance sets a cookie") is false while nothing runs and
+ * always does.
+ */
+export const UNBUILT_MARKER = "*(design — not yet built; see docs/privacy-claims.md)*";
+
 export interface LegalContext {
   mode: DeploymentMode;
   operatorName: string;
