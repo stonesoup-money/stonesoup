@@ -1,0 +1,56 @@
+{
+  "merchant_raw": "GENERAL MART #42",
+  "merchant_normalized": "General Mart",
+  "store_location": "123 Fixture Ave",
+  "purchased_at": "2026-08-01",
+  "subtotal_cents": 900,
+  "tax_cents": 63,
+  "total_cents": 963,
+  "payment_last4": "4242",
+  "line_items": [
+    {
+      "raw_text": "SYNTH BANANAS  1.00 LB @ .59/LB",
+      "normalized_name": "Synthetic Bananas",
+      "qty": 1.0,
+      "unit_price_cents": 59,
+      "extended_price_cents": 59,
+      "discount_cents": null,
+      "category": "produce",
+      "subcategory": null,
+      "confidence": 0.97
+    },
+    {
+      "raw_text": "SYNTH SPARKLING WATER 12PK",
+      "normalized_name": "Synthetic Sparkling Water 12-Pack",
+      "qty": 1,
+      "unit_price_cents": 499,
+      "extended_price_cents": 499,
+      "discount_cents": null,
+      "category": "beverages",
+      "subcategory": "water",
+      "confidence": 0.93
+    },
+    {
+      "raw_text": "CRV BOTTLE DEPOSIT",
+      "normalized_name": "CRV Bottle Deposit",
+      "qty": 1,
+      "unit_price_cents": 105,
+      "extended_price_cents": 105,
+      "discount_cents": null,
+      "category": "fees-adjustments",
+      "subcategory": null,
+      "confidence": 0.99
+    },
+    {
+      "raw_text": "SYNTH PAPER TOWELS 6RL",
+      "normalized_name": "Synthetic Paper Towels 6-Roll",
+      "qty": 1,
+      "unit_price_cents": 237,
+      "extended_price_cents": 237,
+      "discount_cents": null,
+      "category": "household",
+      "subcategory": "paper-goods",
+      "confidence": 0.9
+    }
+  ]
+}

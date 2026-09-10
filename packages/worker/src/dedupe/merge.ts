@@ -183,7 +183,7 @@ export interface LinkOrMergeResult {
 interface ReceiptRow {
   id: string;
   created_at: string;
-  merchant_raw: string;
+  merchant_raw: string | null;
   merchant_normalized: string | null;
   store_location: string | null;
   purchased_at: string | null;
