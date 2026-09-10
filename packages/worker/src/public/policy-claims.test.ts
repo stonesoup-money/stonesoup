@@ -5,6 +5,7 @@ import {
   GOLDEN_SET_CONTRIBUTION_DEFAULT,
   GOLDEN_SET_SUBMISSION_ALLOWLIST,
   GOLDEN_SET_SUBMISSION_EXCLUDED_COLUMNS,
+  GOLDEN_SET_SUBMISSION_EXCLUDED_VERDICTS,
   GOLDEN_SET_SUBMISSION_PSEUDONYMIZED_COLUMNS,
   getLegalDocument,
 } from "@stonesoup/core";
@@ -163,6 +164,35 @@ describe("the golden-set submission payload allowlist is exhaustive (review roun
     );
     expect(GOLDEN_SET_SUBMISSION_ALLOWLIST).not.toContain("created_at");
     expect(GOLDEN_SET_SUBMISSION_PSEUDONYMIZED_COLUMNS).not.toContain("created_at");
+  });
+
+  // Review round 3, finding 4. The row-level filter that /data-promise's
+  // sensitive-content escape hatch depends on: a skip writes a local
+  // `golden_set` row (verdict.ts, review round 1), so "a skipped item is
+  // never sent" holds only if the submission client excludes the whole
+  // row. That client is STON-9 and human-gated, so nothing here can prove
+  // it obeys — what these two assertions do prove is that the constant
+  // recording the requirement names the skip verdict, and names it with a
+  // spelling the schema actually uses, so a typo cannot leave STON-9
+  // filtering nothing while looking correct.
+  it("the excluded-verdict filter names the skip verdict /data-promise's escape hatch relies on", () => {
+    expect(GOLDEN_SET_SUBMISSION_EXCLUDED_VERDICTS).toContain("skipped");
+  });
+
+  it("every excluded verdict is a value the live golden_set.verdict CHECK accepts", async () => {
+    const row = await env.DB.prepare(
+      "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'golden_set'",
+    ).first<{ sql: string }>();
+    const ddl = row?.sql ?? "";
+    expect(ddl.length, "no golden_set DDL found in sqlite_master").toBeGreaterThan(0);
+
+    for (const verdict of GOLDEN_SET_SUBMISSION_EXCLUDED_VERDICTS) {
+      expect(
+        ddl.includes(`'${verdict}'`),
+        `GOLDEN_SET_SUBMISSION_EXCLUDED_VERDICTS names "${verdict}", which the golden_set.verdict ` +
+          "CHECK constraint does not list — a value no row can ever hold filters nothing",
+      ).toBe(true);
+    }
   });
 });
 

@@ -66,3 +66,37 @@ export const GOLDEN_SET_SUBMISSION_EXCLUDED_COLUMNS: readonly string[] = [
   "created_at",
   "submitted_at",
 ];
+
+/**
+ * Verdict values whose **entire row** never crosses the instance
+ * boundary (review round 3, finding 4). The three lists above answer
+ * "which columns of a submitted row may leave"; this one answers "which
+ * rows may be submitted at all", and those are not the same question —
+ * `verdict` appearing in the allowlist above means "carried in the
+ * payload of a row that is submitted", never "every verdict value is
+ * submittable".
+ *
+ * Why this exists: /data-promise tells a privacy-conscious reader that
+ * if a receipt line is something they would rather not contribute, the
+ * move is to **skip** it during review, and that a skipped item is never
+ * sent. Since review round 1 a skip is not a silent no-op —
+ * packages/worker/src/review/verdict.ts writes a `golden_set` row for
+ * every verdict, `'skipped'` included, carrying the raw line text. That
+ * local write is deliberate (losing a reviewer's "not this one" outright
+ * was its own bug) and it is consistent with the page, because "never
+ * sent" is a claim about the *instance boundary*, not about the local
+ * row — but it is only consistent for as long as the submission client
+ * honours this list.
+ *
+ * STON-9's implementer: a row whose `verdict` is named here is not
+ * submitted **at all**. Not with fields redacted, not with the raw
+ * string dropped, not folded into an aggregate — the row does not
+ * leave. That is the whole of what /data-promise's escape hatch
+ * promises, and this constant is where the promise is written down, so
+ * that it is a condition on the code rather than something to remember.
+ *
+ * Metadata, like the rest of this file: nothing here reads a
+ * `golden_set` row or filters one. The submission client is STON-9 and
+ * human-gated (AGENTS.md, Human gates).
+ */
+export const GOLDEN_SET_SUBMISSION_EXCLUDED_VERDICTS: readonly string[] = ["skipped"];

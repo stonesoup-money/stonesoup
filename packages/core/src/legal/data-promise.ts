@@ -39,6 +39,23 @@ import { LEGAL_LAST_UPDATED, UNBUILT_MARKER } from "./context.js";
  * this prose and packages/worker/src/public/policy-claims.test.ts's
  * exhaustiveness check read from, so the two cannot drift apart silently.
  *
+ * **What a skip does (review round 3, finding 4).** The
+ * sensitive-content escape hatch — "skip that item during review" —
+ * described the pre-STON-2 behaviour, where a skip wrote nothing at all.
+ * Review round 1 deliberately changed that: `writeVerdict` now writes a
+ * `golden_set` row for every verdict, `'skipped'` included, carrying the
+ * raw line text, because a skip that recorded nothing lost the
+ * reviewer's decision irrecoverably. That local write does not weaken
+ * the promise, because "never sent" was always a claim about the
+ * *instance boundary* rather than about the local row — but the prose
+ * has to say so instead of letting a reader infer erasure. It now
+ * states both halves, and the constraint the submission client must
+ * satisfy for the promise to hold (exclude every `verdict = 'skipped'`
+ * row from the payload) is recorded in code as
+ * `GOLDEN_SET_SUBMISSION_EXCLUDED_VERDICTS` in
+ * packages/core/src/legal/submission-fields.ts, where STON-9's
+ * implementer is already reading the field allowlist.
+ *
  * **When `labeler` is pseudonymized (decisions.md, "when is `labeler`
  * pseudonymized?").** It happens at the **instance boundary — at
  * submission** — not at dataset export. The local row keeps the real
@@ -58,7 +75,7 @@ export function dataPromiseMarkdown(ctx: LegalContext): string {
 
 Stone Soup's whole reason to exist is a high-quality, honestly-collected labeled dataset of receipt line items. That only works if the promise about what leaves your machine is exact, not marketing. This page is that exactness.
 
-**The local half of this page is real; the submission half has not happened yet.** This codebase writes a \`golden_set\` row on this instance when you confirm or correct a line item's category — see "The local record" below. It still contains no submission client, no central submission database, and no published dataset, so no label has ever left this instance. Sentences describing behaviour that does not exist carry the marker ${UNBUILT_MARKER} at the point of the claim, and \`docs/privacy-claims.md\` is the row-by-row status of every one of them. The design is published here before any label is collected, because a promise made afterwards is worth nothing.
+**The local half of this page is real; the submission half has not happened yet.** This codebase writes a \`golden_set\` row on this instance when you confirm, correct, or skip a line item during review — see "The local record" below. It still contains no submission client, no central submission database, and no published dataset, so no label has ever left this instance. Sentences describing behaviour that does not exist carry the marker ${UNBUILT_MARKER} at the point of the claim, and \`docs/privacy-claims.md\` is the row-by-row status of every one of them. The design is published here before any label is collected, because a promise made afterwards is worth nothing.
 
 ## The local record
 
@@ -99,7 +116,9 @@ It never contains the local row's own **ID**, **\`created_at\`**, or **\`submitt
 
 ## The detail most privacy pages gloss over
 
-The raw line text is designed to be submitted **exactly as printed** ${UNBUILT_MARKER} — that is the entire point of a golden set built from real receipts, and a paraphrased or normalized line would train a model on data that does not look like the real thing. Be aware that a printed receipt line often carries its own price alongside the item name ("ORGANIC BANANAS 1.24 LB @ .79/LB"), and, less often, promotional or loyalty text. The client-side filter described below is designed to screen out the categories of line most likely to be sensitive ${UNBUILT_MARKER}, but it screens for *pattern*, not for a guarantee that no printed line ever surprises you. If you see something on a receipt you would rather not contribute at all, skip that item during review instead of confirming or correcting it — a skipped item is never sent.
+The raw line text is designed to be submitted **exactly as printed** ${UNBUILT_MARKER} — that is the entire point of a golden set built from real receipts, and a paraphrased or normalized line would train a model on data that does not look like the real thing. Be aware that a printed receipt line often carries its own price alongside the item name ("ORGANIC BANANAS 1.24 LB @ .79/LB"), and, less often, promotional or loyalty text. The client-side filter described below is designed to screen out the categories of line most likely to be sensitive ${UNBUILT_MARKER}, but it screens for *pattern*, not for a guarantee that no printed line ever surprises you. If you see something on a receipt you would rather not contribute at all, skip that item during review instead of confirming or correcting it — a skipped item is never sent off this instance. It is still written down here, though, and the difference matters enough to spell out.
+
+**What a skip does, exactly.** Skipping is a boundary guarantee, not an erasure. This instance writes a \`golden_set\` row for a skip just as it does for a confirmation or a correction, raw line text included, because a reviewer's "not this one" is a decision worth keeping and a skip that recorded nothing left that work unrecoverable — see "The local record" above. What the skip governs is what crosses this instance's boundary: nothing crosses it today by any path, and the submission client, when it is built, is required to leave every row whose verdict is \`skipped\` out of the payload entirely — not redacted, not stripped of its raw text, simply not submitted ${UNBUILT_MARKER}. That requirement is recorded in this repository alongside the payload's own field allowlist, so it is a condition the submission code has to satisfy rather than a detail someone has to remember. "The two boundaries" below is the general shape of the same distinction.
 
 ## The client-side filter
 
