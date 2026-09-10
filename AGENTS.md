@@ -1,0 +1,438 @@
+# Agent brief
+
+Stone Soup is a self-hostable personal finance tool that answers
+line-item-level spending questions transaction-level tools cannot. It
+ingests receipts from Gmail and photo upload, extracts line items with
+a vision model, normalizes them against a fixed taxonomy, and exposes
+the data via an MCP server. TypeScript on Cloudflare Workers + Hono +
+D1 + R2 + Queues, AGPL-3.0.
+
+The *Stone Soup — v1 Engineering Brief* document on this project in
+Linear is the authority on everything this file summarizes; STON-16
+records the decisions made where the brief was silent. When a proposal
+conflicts with the brief, the proposal loses or the brief is amended
+deliberately — never by drift.
+
+## This file
+
+AGENTS.md is the only agent brief here. CLAUDE.md and GEMINI.md are
+one-line `@AGENTS.md` imports, so every toolchain reads the same text
+and there is nothing to keep in sync. Edit AGENTS.md; leave the two
+stubs alone.
+
+## House rules
+
+- **The golden set is the product, not a by-product.** Golden-set
+  capture is a first-class write path, not log scraping: when a human
+  resolves a review-queue item, the corresponding `golden_set` record
+  is written **immediately**, in that same step — never deferred to a
+  later batch job over the review table. A design that treats
+  golden-set writes as an afterthought loses data on every partial
+  write. This is the reason the project exists; when a proposal trades
+  it off against **design or scope**, the golden set wins. It does not
+  outrank the Testing section's eval-threshold rule — that rule stays
+  the top of this file's hierarchy (see Testing).
+- **Single deployable.** The Vite/React frontend is served as static
+  assets by the same Worker that runs Hono on `/api/*` — no separate
+  frontend host, no CORS.
+- **Monorepo: pnpm workspaces.**
+- Boring, small, direct. New dependencies need a reason. Scope growth,
+  speculative abstraction, and framework-building are bugs.
+- v1 scope fence — building any of these is scope growth even when it
+  looks small: Plaid + reconciliation, active novelty routing,
+  visualization/chat agent, native app, multi-provider auth,
+  multi-provider LLM support, review-gating economics, emergent
+  taxonomy, merchant connections (Knot etc.).
+- AGPL-3.0 from the first commit — relicensing later needs every
+  contributor's consent, so it cannot be deferred.
+- This repo is public. No secrets, keys, tokens, or credentials in any
+  commit; no control-plane internals, unreleased commercial plans, or
+  private-repo detail in code, comments, or commit messages.
+- Everything a user's data touches lives in this repo (the open
+  artifact). The control plane is a separate private repo and nothing
+  here may depend on it.
+- Config values, not hardcodes: backfill window (90 days), routing
+  levers, checksum tolerance, default model string. Each is a single
+  named export a human can retune in one place.
+- No auto-deploy in v1. Deploys are a human `wrangler` command.
+- Rebase onto current `origin/main` before opening or force-pushing a
+  PR — other tickets merge concurrently.
+- Filing a Linear ticket: set a priority and an estimate, your best
+  judgment, stated once, not discussed.
+
+## Data conventions
+
+1. **Money is integer cents, always.** In D1, in extraction JSON,
+   across every interface. Never a float, never a pre-formatted
+   string. Format at the render edge only.
+2. **Dates are ISO 8601 strings.** SQLite has no date type; this is
+   the convention that replaces one.
+3. **Never overwrite raw receipt text.** `raw`, `normalized`, and
+   `category` are three separate fields. The raw string is the golden
+   set's input — overwriting it destroys the dataset the product
+   exists to build. This is the single most important rule in this
+   file.
+4. **Checksum tolerance**: a receipt passes when
+   `|Σ line_items + tax − stated_total| <= max(2 cents, 0.5% of stated_total)`,
+   exported as one named constant (STON-16). Fees (CRV, bag fees, tips,
+   delivery) are **line items** carrying `fees-adjustments` — they are
+   already inside `Σ line_items`; do not add them again.
+5. Every `line_items` row and every `golden_set` record carries
+   `taxonomy_version`.
+6. **R2 key path**: `{userId}/{yyyy}/{mm}/{receiptUuid}`, used
+   identically at upload and at export — a diverging path on either
+   side breaks the link silently.
+7. **`line_items` embedding columns ship in the first migration.**
+   `embedding`, `embedding_model`, `embedding_version`, and `dims` are
+   nullable and unpopulated from day one — embeddings themselves are
+   phase 2 (see Pipeline rules) — so enabling novelty routing later is
+   a backfill, not a migration. Do not drop these columns from the
+   first schema because nothing writes them yet.
+
+## Taxonomy
+
+- Slugs are permanent IDs. **Additive-only** — never rename or
+  repurpose a slug.
+- Additions are a minor version bump. Moves are a major bump plus a
+  migration map for golden-set records.
+- v1 ships a **provisional** enumeration at `taxonomy_version: 0.1.0`,
+  `status: provisional` (STON-16) — the human pass over real receipt
+  lines adds slugs at 0.2.0 without a migration. That is exactly what
+  additive-only buys.
+- `fees-adjustments` catches non-product lines (CRV, bag fees, tips,
+  delivery, standalone coupons) — without it every real receipt fails
+  checksum. `other` is instrumentation: its usage rate signals a
+  taxonomy gap, so never widen a category to avoid it.
+- **Picker arity is open, not settled.** The taxonomy has two groups
+  (Food & drink, Everything else) holding 22 first-level categories
+  with ~17 second-level slugs under five of them — there is no set of
+  eight anywhere in it, so keys 1–8 cannot bind to what an earlier
+  draft called "the eight first-level groups." Interim rule for
+  implementers (STON-16): keys 1–8 bind to the eight
+  most-frequently-used first-level categories for that user, with a
+  `more` key opening the full list. This is implementable today and
+  changes no slugs, but it is explicitly provisional — STON-8 must
+  design for the arity to change, not treat this as resolved.
+
+## Privacy and the anonymization boundary
+
+The section most at risk of an agent being helpfully wrong. Every rule
+here gets its why.
+
+- A `golden_set` record carries: raw string, merchant *type*, model
+  guess + confidence, human verdict + corrected category, `labeler`,
+  timestamp, routing reason, `taxonomy_version`, `schema_version`,
+  `split`. It carries **no image reference, no receipt id, no user id,
+  no store, no purchase timestamp**.
+- **Two different boundaries, at two different stages — do not
+  conflate them.** *Context* (image reference, receipt id, user id,
+  store, purchase timestamp) is dropped at **write** — it is never in
+  the `golden_set` row to begin with. *Identity* (`labeler`) is the
+  opposite: it **is written and kept locally on purpose**, a real
+  internal identifier used for quality control, and is pseudonymized
+  only at **export**. `labeler` looks like a user id, which makes
+  nulling it at write time feel like it satisfies the context rule
+  above — it doesn't; that rule is about context, not about
+  `labeler`, and nulling `labeler` early is a bug, not a fix
+  (STON-16).
+- `split` is assigned once and never changed. The held-out test set is
+  never used for prompt tuning.
+- The client-side filter runs **before** submission — pharmacy-pattern
+  items and name-like strings never leave the user's machine. It gets
+  the densest case table in the codebase; it is the privacy-critical
+  path.
+- **Email bodies are discarded entirely after parse.** Order
+  confirmations carry addresses, names, and card last-4. Only
+  merchant, date, totals, and line items survive.
+- **No admin view, anywhere.** There must be no screen through which
+  an operator can read a user's data. Per-tenant isolation makes this
+  structural; do not add a surface that undoes it.
+- **No real receipts in the repo, ever** — no images, no verbatim real
+  receipt text in fixtures. Test fixtures are synthetic. The
+  real-receipt eval set stays private.
+- BYOK: the user's Anthropic key lives in Workers Secrets and nowhere
+  else. Never log it, never persist it elsewhere, never send it
+  anywhere but Anthropic.
+
+## Design language
+
+Grounded in the paper ledger and thermal receipt paper, not generic
+warm-startup styling.
+
+- Palette: paper `#FCFCF9` · ink `#1A1A17` · ledger-rule blue
+  `#B9CCDD` · ledger red `#B3392E` · stamp green `#3E6B4F` · thermal
+  grey `#6E6E66`. These six hexes are canonical **today** — there is
+  no token stylesheet yet. Once one lands (STON-2), *it* becomes
+  canonical and this file quotes it instead of restating the values,
+  so there is one copy to keep current. Until then, this list is
+  exempt from the "no inline hex in a component" rule below; nowhere
+  else in the codebase is.
+- **Mobile-first, PWA-installable review inbox.** The review UI is
+  designed for phone-in-hand first, desktop second — not built
+  desktop-first and shrunk. No native app in v1.
+- **Ledger blue is structural ruling only — never text.** It is a
+  hairline color; it does not pass as a foreground.
+- **Ledger red is the single accent**: margin rule, attention counts,
+  over-budget figures. Stamp green is confirmed verdicts. Nothing else
+  earns a color.
+- Type: **Bricolage Grotesque** for display and UI; **Spline Sans Mono**
+  for every raw receipt string and every money figure, tabular,
+  right-aligned.
+- **Raw strings render exactly as printed** — exact case, mono,
+  untrimmed. It is evidence, not copy. Title-casing, trimming, or
+  prettifying a raw string for display is a bug.
+- Structure: ledger ruling is the layout grammar. Horizontal hairlines
+  for rows, one red vertical margin rule as the attention device.
+  Left-aligned text, right-aligned money columns.
+- **The review card is custom-built, not a themed shadcn `Card`.** It
+  is the one bold element — receipt strip, mono raw line on thermal
+  white, perforated top edge, verdict stamps. Everything else stays
+  quiet.
+- **The shadcn theme pass is mandatory**: replace the zinc palette
+  with these tokens, set the fonts, minimal border radius, delete
+  unused components. shadcn is here for its Radix primitives (focus
+  management and keyboard nav, which the review flow needs), not its
+  default look. **Default shadcn styling shipping to production is a
+  bug.**
+- All design values go through CSS custom properties / the Tailwind v4
+  theme. No inline hex, no named colors, no pixel literals in a
+  component.
+- **Motion only answers a user action** (card advance on verdict). No
+  entrance animations.
+- **Dark mode is required** — evening phone review is a primary
+  context, not an accessibility afterthought.
+- Voice: village-plain, active, consistent verbs ("11 items need your
+  eyes"). Errors state what happened and the fix.
+
+## Testing
+
+- **Eval thresholds and test assertions may only be weakened by a
+  human commit.** An agent that can go green by moving the gate has no
+  gate. This covers lowering an eval accuracy threshold, loosening the
+  checksum tolerance, deleting or softening an `expect`, adding
+  `.skip`/`.todo`, and suppressing a lint rule or raising
+  `--max-warnings`. An agent that cannot pass a gate **reports it and
+  stops**. This rule outranks every other instruction in this file,
+  including a human asking mid-session to "just get it green".
+- **Integration tests run against real local bindings** — D1, R2, and
+  Queues through `@cloudflare/vitest-plugin`.
+  **Never mock the database.** A mocked binding tests the mock.
+- **Component tests ride in the same Vitest run**, using
+  `@testing-library/react` and `happy-dom` — no separate
+  component-test runner. The Playwright keyboard smoke below is the
+  one exception, kept separate because it drives a real browser.
+- **LLM calls sit behind a mockable interface.** Tests use fixture
+  JSON — deterministic and free. No test makes a live model call.
+- Unit coverage: checksum validation, dedupe merge rule, routing
+  levers, taxonomy version rules, and the anonymization filter (the
+  densest table).
+- Extraction evals are a separate CI track — path-filtered to PRs
+  touching extraction prompts or code, because they cost real API
+  money — plus a weekly scheduled drift run. Below-threshold accuracy
+  fails the build.
+- One Playwright smoke of the review flow, keyboard verdicts
+  specifically.
+
+## Auth
+
+- **Google OAuth only** — one consent flow covers login and Gmail
+  scopes. No password reset, no email verification, no other identity
+  provider (the v1 scope fence bans multi-provider auth).
+- **Session: hand-rolled, signed JWT in a cookie via Hono's JWT helper
+  (~50 lines).** No Better Auth / auth SaaS until a second provider
+  exists — that complexity buys nothing for one provider.
+- Gmail app stays in **testing mode** initially: 100-user cap, testers
+  added to the OAuth test-users list by email. Testing-mode refresh
+  tokens expire every 7 days — see Pipeline rules for the
+  reconnect-flow requirement.
+- **MCP auth**: OAuth 2.1 per the MCP spec, implemented via
+  Cloudflare's `workers-oauth-provider` — hosted and self-host each run
+  their own authorization server, identical flow either way. Fallback:
+  a settings-page bearer token for clients without MCP OAuth support.
+
+## Pipeline rules
+
+- Extraction is **never inline** — always through Queues.
+- One extraction contract, two modality nodes (vision, text). Same
+  prompt family, same output schema, same validation. **Zero
+  per-merchant parsers.**
+- **Gmail sync only fetches sender-domain-allowlisted mail** (grown
+  over time). Do not sync the whole 90-day window and let extraction
+  decide what's a receipt — that reads far more of the user's mail
+  than intended, costs more tokens on the user's own key, and enlarges
+  the blast radius the "bodies discarded" rule exists to shrink.
+- Gmail message ID is a unique key; re-syncs must not duplicate.
+  Dedupe across photo and email merges on merchant + date + total into
+  one receipt with multiple source references, held in a
+  `receipt_sources` join table (STON-16) — `receipts` carries no
+  `source_id` column; the brief's "source" column on `receipts` and
+  the "multiple source references" requirement cannot both hold, and
+  this is the accepted resolution.
+- **Testing-mode Gmail refresh tokens expire every 7 days** (external
+  app, restricted scopes, no exemption). Build the graceful
+  one-tap-reconnect flow from day one — do not assume long-lived
+  refresh tokens.
+- Routing levers are env vars, manually tuned. **No auto feedback
+  loop.** Throttle precedence (STON-16): queue budget (~100) is a hard
+  ceiling, then `DAILY_REVIEW_CAP`, then `SAMPLING_RATE` last.
+- v1 refill is **cap-only, most recent receipt date first** (STON-16)
+  — embeddings are phase 2 and unpopulated, so there is no novelty to
+  sort on. The novelty hook stays in the interface, unimplemented. The
+  queue holds max ~100 pending per user and refills from backlog when
+  it drops below ~20 — both numbers matter: quoting only the cap
+  invites refilling to 100 on every dequeue, a different UX and a
+  different D1 write pattern.
+- **A review verdict writes `golden_set` immediately**, as part of
+  resolving the review-queue item — see the golden-set rule in House
+  rules above; this is not a separate exception to it.
+- MCP is read-only: parameterized queries over a known schema,
+  constrained text-to-SQL, **never raw model SQL**. Every aggregate
+  supports drill-down to raw line text.
+- No third-party OCR services. The vision model does the whole
+  receipt in one call.
+
+## Human gates
+
+- STON-14 (control plane, private repo): plan only. No code, no
+  deploy.
+- STON-9: local golden-set store and anonymization filter are GO. The
+  **central submission endpoint** and any code transmitting label data
+  off an instance are GATED — build the client interface, wire nothing
+  live.
+- STON-13: privacy policy, ToS, and data-promise are GO. The **dataset
+  publication pipeline** is GATED. No dataset is ever published by an
+  agent, and the human sample review before a release is permanent,
+  not a v1 gate.
+
+## Dispatch
+
+The per-repo configuration the `dispatch`, `implement-ticket`,
+`adversarial-review`, and `merge-queue` skills read. Those skills are
+maintained once outside this repo and are repo-generic; this section
+is how this repo opts into them. A field left unfilled is not a
+default — the skills are required to stop and say which one is
+missing rather than guess.
+
+- **Linear team key**: `STON` (ticket ids are `STON-<n>`).
+- **Check command**: `pnpm check` — typecheck (TypeScript,
+  `strict: true`) + lint + test (Biome for lint/format, Vitest with
+  `@cloudflare/vitest-plugin` for tests). Must pass locally before any
+  push, by an implementer, a fixer, or a human. **It does not exist
+  yet**: it lands with the toolchain in STON-3, and until that merges
+  there is nothing to run — this file declares the contract, STON-3
+  implements it. CI must run this same command rather than
+  enumerating its own steps, so that a tree passing `pnpm check`
+  locally passes CI.
+- **Base branch**: `main`.
+- **Worktrees**: `.claude/worktrees/` — one worktree per ticket, named
+  for the ticket. Gitignored via `.gitignore` at the repo root.
+- **Run manifest**: `.claude/worktrees/dispatch-manifest.md`.
+
+Statuses are Linear's stock ones — `Todo` → `In Progress` →
+`In Review` → `Done` — with two workspace labels doing the rest:
+`approved-to-merge` on a ticket in `In Review` means a human has
+approved its merge and it is in the merge queue; `needs-attention`
+means it needs a human and keeps whatever status it already had.
+`Backlog` is off-limits to dispatch: promoting a ticket to `Todo` is
+the only signal that it is available to work.
+
+### Review invariants
+
+What a reviewer of a change to this repo is adversarial about. A diff
+that breaks one of these is a major finding, not a nit. These point at
+the house rules above rather than restating them, so there is one copy
+to keep current; where the two look like they disagree, the rule above
+wins.
+
+1. **Money as integer cents, end to end** — Data conventions, #1.
+   Trigger: a float, a formatted string in a schema or interface, or a
+   currency value crossing a boundary as anything but an integer.
+2. **Raw receipt text never overwritten** — Data conventions, #3.
+   Trigger: normalizing in place, trimming, or reusing the raw column
+   for a derived value.
+3. **The anonymization boundary** — Privacy and the anonymization
+   boundary, the `golden_set` and two-boundaries bullets. Trigger: a
+   golden-set write or submission carrying context (image reference,
+   receipt id, user id, store, purchase timestamp); also stripping or
+   nulling `labeler` at write time instead of export.
+4. **Sensitive strings never leave the machine** — Privacy and the
+   anonymization boundary, the client-side filter bullet. Trigger: a
+   submission path that bypasses the filter, or a filter change that
+   narrows its case table without a stated reason.
+5. **Eval thresholds and test assertions weaken only by human
+   commit** — Testing, first bullet. Trigger: a lowered threshold, a
+   deleted or softened assertion, `.skip`/`.todo`, or a suppressed
+   lint rule, regardless of the commit message or whether the change
+   is otherwise correct.
+6. **Integration tests hit real local bindings** — Testing, the
+   bindings and LLM-interface bullets. Trigger: a mocked D1, R2, or
+   Queue; or an LLM call not behind the mockable interface.
+7. **No real receipt data in the repo** — Privacy and the
+   anonymization boundary, "No real receipts in the repo, ever."
+   Trigger: a committed receipt image or verbatim real receipt text in
+   a fixture, however useful the test case.
+8. **The design language is not optional** — Design language, in
+   full. Trigger: default shadcn styling, a raw hex or pixel literal
+   in a component (outside the palette's own stated exemption), the
+   zinc palette surviving, ledger blue used as text, the review card
+   as a themed shadcn `Card`, a prettified raw receipt string, an
+   entrance animation, or no dark-mode path.
+9. **Taxonomy slugs are permanent and additive-only** — Taxonomy,
+   first two bullets. Trigger: a renamed or repurposed slug; a move
+   without a major bump and a migration map; a `line_items` or
+   `golden_set` write missing `taxonomy_version`.
+10. **Pipeline shape** — Pipeline rules, the extraction-contract and
+    Gmail bullets. Trigger: extraction running inline instead of
+    through Queues, a per-merchant parser, an email body persisted
+    past parse, a second extraction output schema, or a Gmail sync
+    that ignores the sender-domain allowlist and reads the whole
+    90-day window instead.
+11. **MCP stays read-only** — Pipeline rules, the MCP bullet. Trigger:
+    raw model-authored SQL, a write-capable tool, or an aggregate with
+    no drill-down to raw line text.
+12. **No admin surface** — Privacy and the anonymization boundary, "No
+    admin view, anywhere." Trigger: any route, page, or query through
+    which an operator could read a user's data, regardless of how it
+    is gated.
+13. **Public repo, public history** — House rules, "This repo is
+    public." Trigger: a secret, key, credential, or control-plane
+    internal in a commit, comment, or commit message, regardless of
+    size.
+14. **Gated work stays gated** — Human gates, in full. Trigger: code
+    for STON-14, the central submission endpoint, or the dataset
+    publication pipeline, absent explicit in-session human
+    instruction.
+15. **Config, not hardcode** — House rules, "Config values, not
+    hardcodes." Trigger: a literal backfill window, routing lever,
+    checksum tolerance, or model string inlined at a call site instead
+    of a single named constant.
+16. **Golden-set writes happen immediately, in the same step as the
+    verdict** — House rules, "The golden set is the product, not a
+    by-product"; Pipeline rules, the golden-set bullet. Trigger: a
+    verdict path that updates `line_items` without writing the
+    matching `golden_set` record in the same step; any batch, cron, or
+    backfill job that populates `golden_set` after the fact.
+17. **Checksum arithmetic matches the stated formula exactly** — Data
+    conventions, #4. Trigger: any formula other than the one stated
+    there, including double-counting fees (already inside `Σ
+    line_items`) or comparing against a different tolerance.
+18. **v1 scope fence holds** — House rules, "v1 scope fence." Trigger:
+    Plaid/reconciliation, active novelty routing, a visualization/chat
+    agent, a native app, multi-provider auth, multi-provider LLM
+    support, review-gating economics, emergent taxonomy, or a
+    merchant-connection integration (Knot etc.), however small.
+19. **Single deployable, no CORS** — House rules, "Single deployable."
+    Trigger: a separate frontend host, a second Worker or service
+    serving the UI, or a CORS configuration added instead of serving
+    the frontend from the same Worker.
+20. **Dedupe merges on merchant + date + total** — Pipeline rules, the
+    Gmail-message-ID and dedupe bullet. Trigger: a photo/email pair
+    that should merge into one receipt landing as two, or a merge rule
+    keyed on anything other than merchant + date + total.
+21. **Testing-mode Gmail refresh tokens expire in 7 days** — Pipeline
+    rules, the refresh-token bullet. Trigger: code that assumes a
+    long-lived Gmail refresh token, or a missing one-tap reconnect
+    flow.
+22. **Auth stays hand-rolled and single-provider** — Auth, bullets
+    1–2. Trigger: an auth library or SaaS, a second identity provider,
+    or a session that is not the Hono-JWT cookie.
