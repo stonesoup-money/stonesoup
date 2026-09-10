@@ -122,15 +122,35 @@ beforeEach(async () => {
   photoSourceId = await insertSource("photo");
 });
 
-// Test A: the happy photo+email merge.
-describe("A: photo + email of one synthetic purchase merge into one receipt", () => {
+// Test A: the happy photo+email merge, in the REAL ordering (review round
+// 1, finding 3). The photo receipts row is created at upload — before
+// merchant/date/total are known, so it is always the older row — and the
+// email is persisted with committed line items well before the photo's
+// asynchronous extraction finishes. An earlier version of this test had
+// the ordering backwards (email row created first) and so could not catch
+// selectSurvivor picking purely on created_at: in the real ordering that
+// bug makes the (line-item-bearing) email the "duplicate" and the merge
+// always refuses — the feature silently never fires in its own primary
+// flow. See the "inverse ordering" describe block below for the other
+// ordering, kept as separate coverage.
+describe("A: photo + email of one synthetic purchase merge into one receipt (real ordering: photo row created first)", () => {
   it("ends with one receipt, two receipt_sources rows, one set of line items, and the duplicate gone", async () => {
+    // 10:00 — photo upload creates its receipts row before extraction has
+    // run: merchant/date/total are still unknown.
+    const photoReceiptId = await insertReceipt({
+      merchantRaw: "TRADER JOE'S #123",
+      createdAt: "2026-06-05T10:00:00.000Z",
+    });
+
+    // 10:05 — the email arrives, is extracted synchronously, and is
+    // persisted (linkOrMerge finds no candidate yet — the photo row has
+    // no merchant_normalized — then the caller writes its line items).
     const emailReceiptId = await insertReceipt({
       merchantRaw: "Trader Joe's",
       merchantNormalized: "Trader Joe's",
-      purchasedAt: "2026-03-05",
+      purchasedAt: "2026-06-05",
       totalCents: 4_312,
-      createdAt: "2026-01-01T00:00:00.000Z",
+      createdAt: "2026-06-05T10:05:00.000Z",
     });
     const emailResult = await linkOrMerge(DB, {
       receiptId: emailReceiptId,
@@ -141,16 +161,14 @@ describe("A: photo + email of one synthetic purchase merge into one receipt", ()
     expect(emailResult).toMatchObject({ merged: false, finalReceiptId: emailReceiptId });
     await insertLineItem(emailReceiptId, "ORG BANANAS 1.24 LB @ .79/LB");
 
-    // The photo path creates its receipts row at upload, before
-    // merchant/date/total are known; this insert stands in for that row
-    // once extraction has completed and written the key fields onto it.
-    const photoReceiptId = await insertReceipt({
-      merchantRaw: "TRADER JOE'S #123",
-      merchantNormalized: "TRADER JOE'S #123",
-      purchasedAt: "2026-03-05",
-      totalCents: 4_312,
-      createdAt: "2026-01-01T00:00:01.000Z",
-    });
+    // 10:30 — the photo's extraction completes. Its caller has already
+    // UPDATEd the row's key fields (per linkOrMerge's module contract)
+    // before calling linkOrMerge.
+    await DB.prepare(
+      `UPDATE receipts SET merchant_normalized = ?, purchased_at = ?, total_cents = ? WHERE id = ?`,
+    )
+      .bind("TRADER JOE'S #123", "2026-06-05", 4_312, photoReceiptId)
+      .run();
 
     const result = await linkOrMerge(DB, {
       receiptId: photoReceiptId,
@@ -159,6 +177,11 @@ describe("A: photo + email of one synthetic purchase merge into one receipt", ()
       externalId: null,
     });
 
+    // The photo row is the older row (created at 10:00, vs. the email's
+    // 10:05) — a created_at-only selectSurvivor would pick it as survivor
+    // and refuse to delete the line-item-bearing email as "duplicate".
+    // The email must win as survivor because it already carries the
+    // committed line items.
     expect(result.merged).toBe(true);
     expect(result.finalReceiptId).toBe(emailReceiptId);
     expect(result.lineItemsAlreadyPresent).toBe(true);
@@ -173,6 +196,54 @@ describe("A: photo + email of one synthetic purchase merge into one receipt", ()
       .bind(emailReceiptId, photoReceiptId)
       .all<{ id: string }>();
     expect(survivingIds.results.map((r) => r.id)).toEqual([emailReceiptId]);
+  });
+});
+
+// Test A2: the inverse ordering — the email row happens to be created
+// first, before the photo row. Not the real flow (kept as separate
+// coverage per review round 1, finding 3), but it must still merge
+// correctly: the line-items preference picks the same survivor regardless
+// of which side created_at favors.
+describe("A2: photo + email merge — inverse ordering (email row created first)", () => {
+  it("still merges onto the line-item-bearing email receipt", async () => {
+    const emailReceiptId = await insertReceipt({
+      merchantRaw: "Trader Joe's",
+      merchantNormalized: "Trader Joe's",
+      purchasedAt: "2026-06-10",
+      totalCents: 4_312,
+      createdAt: "2026-06-10T09:00:00.000Z",
+    });
+    const emailResult = await linkOrMerge(DB, {
+      receiptId: emailReceiptId,
+      sourceId: gmailSourceId,
+      sourceType: "gmail",
+      externalId: "gmail-msg-inverse-ordering",
+    });
+    expect(emailResult).toMatchObject({ merged: false, finalReceiptId: emailReceiptId });
+    await insertLineItem(emailReceiptId, "ORG BANANAS 1.24 LB @ .79/LB");
+
+    // The photo row is created and its extraction result written after
+    // the email, so it is the newer row this time.
+    const photoReceiptId = await insertReceipt({
+      merchantRaw: "TRADER JOE'S #123",
+      merchantNormalized: "TRADER JOE'S #123",
+      purchasedAt: "2026-06-10",
+      totalCents: 4_312,
+      createdAt: "2026-06-10T09:30:00.000Z",
+    });
+
+    const result = await linkOrMerge(DB, {
+      receiptId: photoReceiptId,
+      sourceId: photoSourceId,
+      sourceType: "photo",
+      externalId: null,
+    });
+
+    expect(result.merged).toBe(true);
+    expect(result.finalReceiptId).toBe(emailReceiptId);
+    expect(result.lineItemsAlreadyPresent).toBe(true);
+    expect(await countReceipts([emailReceiptId, photoReceiptId])).toBe(1);
+    expect(await countReceiptSources(emailReceiptId)).toBe(2);
   });
 });
 
@@ -219,13 +290,16 @@ describe("B: deleting a duplicate before re-pointing its receipt_sources fails l
   });
 });
 
-// Test C: the duplicate-has-line-items refusal.
-describe("C: a merge that would require deleting committed line items refuses instead", () => {
+// Test C: the duplicate-has-line-items refusal. With the line-items-first
+// survivor preference (review round 1, finding 3), the item-bearing side
+// always wins survivor selection when only one side has committed items —
+// see Test A — so this refusal can now only be reached when BOTH sides
+// already carry committed line items: whichever one selectSurvivor's
+// created_at tiebreak names "duplicate" still has real data that must not
+// be deleted. A single re-extraction or backfill producing committed
+// items on both sides of a would-be merge is exactly that anomaly.
+describe("C: a merge where both sides already carry committed line items refuses instead", () => {
   it("refuses, leaves both receipts standing, and deletes nothing", async () => {
-    // The incoming row is older, so it would normally be the survivor —
-    // but the candidate (younger, and about to become "the duplicate")
-    // already carries committed line items from a prior re-extraction or
-    // backfill. linkOrMerge must refuse rather than delete real data.
     const incomingReceiptId = await insertReceipt({
       merchantRaw: "Trader Joe's",
       merchantNormalized: "Trader Joe's",
@@ -233,6 +307,7 @@ describe("C: a merge that would require deleting committed line items refuses in
       totalCents: 4_312,
       createdAt: "2026-01-01T00:00:00.000Z",
     });
+    await insertLineItem(incomingReceiptId, "ALSO ALREADY COMMITTED ITEM");
     const candidateReceiptId = await insertReceipt({
       merchantRaw: "TRADER JOE'S #123",
       merchantNormalized: "TRADER JOE'S #123",
@@ -240,6 +315,10 @@ describe("C: a merge that would require deleting committed line items refuses in
       totalCents: 4_312,
       createdAt: "2026-01-01T00:00:01.000Z",
     });
+    // Known provenance — see Test D's comment; a photo link so it doesn't
+    // also trip the (separate) same-source-type veto against the
+    // incoming gmail source below.
+    await linkSourceDirect(candidateReceiptId, photoSourceId);
     await insertLineItem(candidateReceiptId, "ALREADY COMMITTED ITEM");
 
     const result = await linkOrMerge(DB, {
@@ -254,6 +333,7 @@ describe("C: a merge that would require deleting committed line items refuses in
     expect(result.finalReceiptId).toBe(incomingReceiptId);
 
     expect(await countReceipts([incomingReceiptId, candidateReceiptId])).toBe(2);
+    expect(await countLineItems(incomingReceiptId)).toBe(1);
     expect(await countLineItems(candidateReceiptId)).toBe(1);
   });
 });
@@ -269,6 +349,12 @@ describe("D: the survivor's merchant_raw is byte-identical after a merge", () =>
       totalCents: 4_312,
       createdAt: "2026-01-01T00:00:00.000Z",
     });
+    // Known provenance: the survivor has already been through its own
+    // persist step's linkOrMerge call (or, as here, the equivalent direct
+    // link), so it has a receipt_sources row — otherwise it would read as
+    // unknown provenance and never match at all (review round 1, finding
+    // 1; see the dedicated "H" test below for that case).
+    await linkSourceDirect(survivorId, gmailSourceId);
     const duplicateId = await insertReceipt({
       merchantRaw: "TRADER JOE'S #123",
       merchantNormalized: "TRADER JOE'S #123",
@@ -310,6 +396,8 @@ describe("E: COALESCE fill populates only NULL survivor fields and bumps updated
       createdAt: survivorUpdatedAt,
       updatedAt: survivorUpdatedAt,
     });
+    // Known provenance — see Test D's comment.
+    await linkSourceDirect(survivorId, gmailSourceId);
     const duplicateId = await insertReceipt({
       merchantRaw: "TRADER JOE'S #123",
       merchantNormalized: "TRADER JOE'S #123",
@@ -431,6 +519,8 @@ describe("G: a merge leaves line_items, review_queue, and golden_set untouched",
       totalCents: 4_312,
       createdAt: "2026-01-01T00:00:00.000Z",
     });
+    // Known provenance — see Test D's comment.
+    await linkSourceDirect(survivorId, gmailSourceId);
     const lineItemId = await insertLineItem(survivorId, "ORG BANANAS 1.24 LB @ .79/LB");
 
     const reviewQueueId = crypto.randomUUID();
@@ -517,6 +607,11 @@ describe("no candidates / ambiguous collision (real D1)", () => {
       totalCents: 500,
       createdAt: "2026-01-01T00:00:00.000Z",
     });
+    // Known provenance for both candidates — see Test D's comment. A
+    // photo link so this test's ambiguity is the collision the test
+    // targets, not the (separate) unknown-provenance veto covered by
+    // Test H below.
+    await linkSourceDirect(coffee1, photoSourceId);
     const coffee2 = await insertReceipt({
       merchantRaw: "Blue Bottle Coffee",
       merchantNormalized: "Blue Bottle Coffee",
@@ -524,6 +619,7 @@ describe("no candidates / ambiguous collision (real D1)", () => {
       totalCents: 500,
       createdAt: "2026-01-01T00:00:01.000Z",
     });
+    await linkSourceDirect(coffee2, photoSourceId);
     const incomingId = await insertReceipt({
       merchantRaw: "BLUE BOTTLE COFFEE",
       merchantNormalized: "BLUE BOTTLE COFFEE",
@@ -545,5 +641,129 @@ describe("no candidates / ambiguous collision (real D1)", () => {
     // All three receipts survive intact — the rule fails toward a visible
     // duplicate, never toward destroying a real receipt.
     expect(await countReceipts([coffee1, coffee2, incomingId])).toBe(3);
+  });
+});
+
+// Test H: unknown provenance never merges (review round 1, finding 1). This
+// is the exact catastrophic reproduction from the review: two genuinely
+// distinct, same-shop, same-day, same-total purchases must not merge just
+// because the earlier one has not (yet, or ever) gotten its own
+// receipt_sources row written — that is UNKNOWN provenance, not proof the
+// two purchases differ.
+describe("H: a candidate with no receipt_sources rows never merges (unknown, not different, provenance)", () => {
+  it("two same-shop, same-day, same-total coffees stay two receipts when the earlier one has no source link yet", async () => {
+    // coffee1 stands in for a receipt whose key fields were written by an
+    // extraction-persist step that never reached its own linkOrMerge call
+    // (queue retry, a thrown batch) — or a backfill/import path that never
+    // wrote a receipt_sources row at all. It is deliberately NOT linked to
+    // any source here.
+    const coffee1 = await insertReceipt({
+      merchantRaw: "Blue Bottle Coffee",
+      merchantNormalized: "Blue Bottle Coffee",
+      purchasedAt: "2026-06-15",
+      totalCents: 500,
+      createdAt: "2026-01-01T00:00:00.000Z",
+    });
+    const coffee2 = await insertReceipt({
+      merchantRaw: "Blue Bottle Coffee",
+      merchantNormalized: "Blue Bottle Coffee",
+      purchasedAt: "2026-06-15",
+      totalCents: 500,
+      createdAt: "2026-01-01T00:00:01.000Z",
+    });
+
+    const result = await linkOrMerge(DB, {
+      receiptId: coffee2,
+      sourceId: photoSourceId,
+      sourceType: "photo",
+      externalId: null,
+    });
+
+    expect(result.merged).toBe(false);
+    expect(result.refusedReason).toBeNull();
+    expect(result.ambiguousMatchCount).toBeNull();
+    expect(result.finalReceiptId).toBe(coffee2);
+    // Both real, distinct purchases survive intact — the exact
+    // catastrophic case the ticket exists to prevent (review round 1,
+    // finding 1: without the fix, this merges and DELETEs coffee1).
+    expect(await countReceipts([coffee1, coffee2])).toBe(2);
+    expect(await countReceiptSources(coffee1)).toBe(0);
+    expect(await countReceiptSources(coffee2)).toBe(1);
+  });
+});
+
+/**
+ * Wraps a real D1Database so `onBeforeBatch` runs immediately before
+ * `batch()` executes — simulating a write landing in the window between an
+ * earlier read (the `duplicateLineItems` check in `linkOrMerge`) and the
+ * batch that acts on its result. `prepare` and every other property pass
+ * straight through unwrapped so `.bind()/.run()/.first()/.all()` behave
+ * identically to the real binding; only `batch` is intercepted.
+ */
+function withBatchRace(db: D1Database, onBeforeBatch: () => Promise<void>): D1Database {
+  return {
+    prepare: (query: string) => db.prepare(query),
+    batch: async (statements: D1PreparedStatement[]) => {
+      await onBeforeBatch();
+      return db.batch(statements);
+    },
+  } as unknown as D1Database;
+}
+
+// Test I: the race window between the duplicateLineItems check and
+// db.batch() (review round 1, finding 2). A line item lands on the
+// duplicate in that window (queue redelivery, a concurrent extraction);
+// the unguarded DELETE (no NOT EXISTS) must collide with
+// line_items.receipt_id's ON DELETE RESTRICT and abort the whole batch,
+// rather than silently deleting 0 rows and leaving a partial merge with a
+// double-count.
+describe("I: a line item landing on the duplicate mid-race aborts the whole batch (real D1)", () => {
+  it("rejects instead of silently partial-committing, and leaves both receipts and the racy line item intact", async () => {
+    const survivorId = await insertReceipt({
+      merchantRaw: "Trader Joe's",
+      merchantNormalized: "Trader Joe's",
+      purchasedAt: "2026-06-20",
+      totalCents: 4_312,
+      createdAt: "2026-01-01T00:00:00.000Z",
+    });
+    // Known provenance — see Test D's comment.
+    await linkSourceDirect(survivorId, gmailSourceId);
+    const duplicateId = await insertReceipt({
+      merchantRaw: "TRADER JOE'S #123",
+      merchantNormalized: "TRADER JOE'S #123",
+      purchasedAt: "2026-06-20",
+      totalCents: 4_312,
+      storeLocation: "999 Racy Ave, Nowhere",
+      createdAt: "2026-01-01T00:00:01.000Z",
+    });
+
+    const racedDb = withBatchRace(DB, async () => {
+      // Lands strictly after linkOrMerge's upfront duplicateLineItems
+      // check (0 items, not refused) and strictly before its db.batch()
+      // call — the exact window review round 1, finding 2 describes.
+      await insertLineItem(duplicateId, "RACY ITEM LANDED MID-MERGE");
+    });
+
+    await expect(
+      linkOrMerge(racedDb, {
+        receiptId: duplicateId,
+        sourceId: photoSourceId,
+        sourceType: "photo",
+        externalId: null,
+      }),
+    ).rejects.toThrow();
+
+    // Atomic abort: db.batch() is all-or-nothing, so none of the four
+    // statements committed. Both receipts still stand, the duplicate's
+    // receipt_sources were never re-pointed, and — the point of the
+    // fix — the racy line item that landed mid-merge is still there, not
+    // silently orphaned on a deleted-from-under-it receipt.
+    expect(await countReceipts([survivorId, duplicateId])).toBe(2);
+    expect(await countLineItems(duplicateId)).toBe(1);
+    expect(await countReceiptSources(duplicateId)).toBe(0);
+    const survivorRow = await DB.prepare(`SELECT store_location FROM receipts WHERE id = ?`)
+      .bind(survivorId)
+      .first<{ store_location: string | null }>();
+    expect(survivorRow?.store_location).toBeNull();
   });
 });

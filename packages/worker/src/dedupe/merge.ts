@@ -40,6 +40,7 @@ interface CandidateRow {
   total_cents: number | null;
   payment_last4: string | null;
   source_types: string | null;
+  line_item_count: number;
 }
 
 /**
@@ -56,6 +57,19 @@ interface CandidateRow {
  *
  * `total_cents` is compared exactly, not the checksum tolerance — see
  * `packages/core/src/dedupe.ts`'s module comment.
+ *
+ * `source_types` is `NULL` (mapped to `[]` below) when the candidate has
+ * no `receipt_sources` rows at all — that is UNKNOWN provenance, and
+ * `matchDecision` (`packages/core/src/dedupe.ts`) is the layer that
+ * refuses to treat an empty list as "different" from the incoming source
+ * type (review round 1, finding 1). This query only produces the raw
+ * list; it does not interpret it.
+ *
+ * `line_item_count` is a second `LEFT JOIN` + `COUNT(DISTINCT ...)` in the
+ * same grouped query, not a second round trip — `selectSurvivor` needs to
+ * know, for every candidate, whether it already carries committed line
+ * items so it can prefer that side as the merge survivor (review round 1,
+ * finding 3).
  */
 export async function findMergeCandidates(
   db: D1Database,
@@ -69,10 +83,12 @@ export async function findMergeCandidates(
   const { results } = await db
     .prepare(
       `SELECT r.id, r.created_at, r.merchant_normalized, r.purchased_at, r.total_cents, r.payment_last4,
-              GROUP_CONCAT(DISTINCT s.type) AS source_types
+              GROUP_CONCAT(DISTINCT s.type) AS source_types,
+              COUNT(DISTINCT li.id) AS line_item_count
          FROM receipts r
          LEFT JOIN receipt_sources rs ON rs.receipt_id = r.id
          LEFT JOIN sources s ON s.id = rs.source_id
+         LEFT JOIN line_items li ON li.receipt_id = r.id
         WHERE r.purchased_at >= ?1 AND r.purchased_at < ?2
           AND r.total_cents = ?3
           AND r.merchant_normalized IS NOT NULL
@@ -90,6 +106,7 @@ export async function findMergeCandidates(
     totalCents: row.total_cents,
     paymentLast4: row.payment_last4,
     sourceTypes: (row.source_types ? row.source_types.split(",") : []) as SourceType[],
+    hasLineItems: row.line_item_count > 0,
   }));
 }
 
@@ -242,6 +259,13 @@ export async function linkOrMerge(
     excludeReceiptId: input.receiptId,
   });
 
+  // Almost always false for a freshly-extracted receipt being persisted
+  // for the first time, but computed rather than assumed — a
+  // re-extraction/backfill call could differ, and selectSurvivor's
+  // line-items preference (review round 1, finding 3) needs the real
+  // answer for both sides, not just the candidate side.
+  const incomingHasLineItems = (await lineItemCount(db, incomingRow.id)) > 0;
+
   const resolution = resolveDedupe(
     {
       id: incomingRow.id,
@@ -251,6 +275,7 @@ export async function linkOrMerge(
       totalCents: incomingRow.total_cents,
       paymentLast4: incomingRow.payment_last4,
       sourceType: input.sourceType,
+      hasLineItems: incomingHasLineItems,
     },
     candidates,
   );
@@ -336,15 +361,22 @@ export async function linkOrMerge(
         now,
         survivor.id,
       ),
-    // 4. Delete the now-childless duplicate. The NOT EXISTS guard is a
-    // second line of defense on top of the upfront duplicateLineItems
-    // check above; ON DELETE RESTRICT on line_items.receipt_id and
-    // receipt_sources.receipt_id is the backstop if step 1 is ever wrong.
-    db
-      .prepare(
-        `DELETE FROM receipts WHERE id = ? AND NOT EXISTS (SELECT 1 FROM line_items WHERE receipt_id = ?)`,
-      )
-      .bind(duplicate.id, duplicate.id),
+    // 4. Delete the now-childless duplicate. Deliberately unguarded — no
+    // `NOT EXISTS (SELECT 1 FROM line_items ...)` here (review round 1,
+    // finding 2). The upfront duplicateLineItems check above (line ~291)
+    // is a TOCTOU-vulnerable optimistic check: a line item can land on
+    // the duplicate between that check and this batch (queue redelivery,
+    // a concurrent extraction). A `NOT EXISTS`-guarded DELETE would match
+    // 0 rows in that race and succeed silently — the batch would not
+    // throw, statements 1-3 would still commit, and the caller would be
+    // told `merged: true` while the duplicate survives holding its line
+    // items with zero receipt_sources rows: a silent partial merge and a
+    // double-count. An unguarded DELETE instead collides with
+    // `ON DELETE RESTRICT` on line_items.receipt_id and lets D1 abort the
+    // *entire* batch atomically — the loud failure the comment on
+    // statements 1-3 already assumes is happening. Let the schema do its
+    // job; do not re-add a guard here.
+    db.prepare(`DELETE FROM receipts WHERE id = ?`).bind(duplicate.id),
   ];
 
   await db.batch(statements);

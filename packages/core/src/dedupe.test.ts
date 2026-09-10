@@ -27,6 +27,7 @@ function candidate(overrides: Partial<DedupeCandidate> = {}): DedupeCandidate {
     totalCents: 4_312,
     paymentLast4: null,
     sourceTypes: ["gmail"],
+    hasLineItems: false,
     ...overrides,
   };
 }
@@ -40,6 +41,7 @@ function incoming(overrides: Partial<IncomingReceipt> = {}): IncomingReceipt {
     totalCents: 4_312,
     paymentLast4: null,
     sourceType: "photo",
+    hasLineItems: false,
     ...overrides,
   };
 }
@@ -198,6 +200,26 @@ describe("matchDecision — the case table", () => {
     expect(matchDecision(c, i)).toBe("same-source-type");
   });
 
+  it("15b: candidate has zero receipt_sources rows (empty sourceTypes) -> no merge (review round 1, finding 1)", () => {
+    // Empty means UNKNOWN provenance, not DIFFERENT provenance. A naive
+    // `sourceTypes.includes(incoming.sourceType)` reads [] as "no source
+    // type in common" and lets the merge through — the exact bug that
+    // merged and deleted one of two real, distinct same-day/same-total
+    // coffee receipts because the earlier one had no receipt_sources row
+    // yet (queue retry / thrown batch / backfill path).
+    const c = candidate({ sourceTypes: [] });
+    const i = incoming({ sourceType: "photo" });
+    expect(matchDecision(c, i)).toBe("source-types-unknown");
+  });
+
+  it("15c: candidate has zero receipt_sources rows even when the incoming source type differs -> still no merge", () => {
+    // Proves the veto fires on emptiness itself, not on some inferred
+    // "different from gmail" reading of [].
+    const c = candidate({ sourceTypes: [] });
+    const i = incoming({ sourceType: "gmail" });
+    expect(matchDecision(c, i)).toBe("source-types-unknown");
+  });
+
   it("respects a custom windowDays override", () => {
     const c = candidate({ purchasedAt: "2026-03-05" });
     const i = incoming({ purchasedAt: "2026-03-08T02:14:00.000Z" });
@@ -209,26 +231,63 @@ describe("matchDecision — the case table", () => {
   });
 });
 
-describe("selectSurvivor — case 17: deterministic (older created_at wins; tie -> lower id)", () => {
-  it("older created_at wins regardless of argument order", () => {
-    const older = { id: "b", createdAt: "2026-03-05T08:00:00.000Z" };
-    const newer = { id: "a", createdAt: "2026-03-05T09:00:00.000Z" };
+describe("selectSurvivor — case 17: deterministic (line items first, then older created_at wins; tie -> lower id)", () => {
+  it("older created_at wins regardless of argument order, when neither side has line items", () => {
+    const older = { id: "b", createdAt: "2026-03-05T08:00:00.000Z", hasLineItems: false };
+    const newer = { id: "a", createdAt: "2026-03-05T09:00:00.000Z", hasLineItems: false };
     expect(selectSurvivor(older, newer)).toBe(older);
     expect(selectSurvivor(newer, older)).toBe(older);
   });
 
-  it("ties on created_at break toward the lexicographically lower id", () => {
+  it("ties on created_at break toward the lexicographically lower id, when neither side has line items", () => {
     const same = "2026-03-05T08:00:00.000Z";
-    const lower = { id: "aaa", createdAt: same };
-    const higher = { id: "zzz", createdAt: same };
+    const lower = { id: "aaa", createdAt: same, hasLineItems: false };
+    const higher = { id: "zzz", createdAt: same, hasLineItems: false };
     expect(selectSurvivor(lower, higher)).toBe(lower);
     expect(selectSurvivor(higher, lower)).toBe(lower);
   });
 
   it("an exact self-tie (same id and created_at) returns a stable choice", () => {
-    const a = { id: "same-id", createdAt: "2026-03-05T08:00:00.000Z" };
-    const b = { id: "same-id", createdAt: "2026-03-05T08:00:00.000Z" };
+    const a = { id: "same-id", createdAt: "2026-03-05T08:00:00.000Z", hasLineItems: false };
+    const b = { id: "same-id", createdAt: "2026-03-05T08:00:00.000Z", hasLineItems: false };
     expect(selectSurvivor(a, b)).toBe(a);
+  });
+
+  it("the side carrying committed line items wins regardless of created_at (review round 1, finding 3)", () => {
+    // The canonical photo flow: the photo `receipts` row is created at
+    // upload — always the older row — but the email side is the one that
+    // gets its line items committed first, since photo extraction
+    // completes asynchronously, later. A pure created_at-based pick would
+    // make the (empty) photo row the survivor and the (line-item-bearing)
+    // email row the "duplicate" — which linkOrMerge then refuses to
+    // delete, so the feature never fires in its own primary flow.
+    const olderNoLineItems = {
+      id: "photo-row",
+      createdAt: "2026-03-05T10:00:00.000Z",
+      hasLineItems: false,
+    };
+    const newerWithLineItems = {
+      id: "email-row",
+      createdAt: "2026-03-05T10:05:00.000Z",
+      hasLineItems: true,
+    };
+    expect(selectSurvivor(olderNoLineItems, newerWithLineItems)).toBe(newerWithLineItems);
+    expect(selectSurvivor(newerWithLineItems, olderNoLineItems)).toBe(newerWithLineItems);
+  });
+
+  it("falls back to older created_at when both sides carry line items", () => {
+    const olderWithLineItems = {
+      id: "a",
+      createdAt: "2026-03-05T08:00:00.000Z",
+      hasLineItems: true,
+    };
+    const newerWithLineItems = {
+      id: "b",
+      createdAt: "2026-03-05T09:00:00.000Z",
+      hasLineItems: true,
+    };
+    expect(selectSurvivor(olderWithLineItems, newerWithLineItems)).toBe(olderWithLineItems);
+    expect(selectSurvivor(newerWithLineItems, olderWithLineItems)).toBe(olderWithLineItems);
   });
 });
 
@@ -278,6 +337,57 @@ describe("resolveDedupe — case 17: a single match resolves survivor/duplicate 
       outcome: "merge",
       survivor: { id: "incoming-1", createdAt: "2026-03-05T07:00:00.000Z" },
       duplicate: { id: "candidate-1", createdAt: "2026-03-05T08:00:00.000Z" },
+    });
+  });
+});
+
+describe("resolveDedupe — the canonical photo flow (review round 1, finding 3)", () => {
+  it("prefers the line-items-bearing candidate as survivor even though it is the newer row", () => {
+    // Real ordering: the photo receipts row is created at upload (10:00,
+    // no line items yet — extraction hasn't run); the email row is
+    // created and persisted with committed line items five minutes later
+    // (10:05); photo extraction (the incoming call here) completes last.
+    // The photo is always the older row in this flow, so a created_at-only
+    // pick would make it the survivor and refuse the merge on the
+    // line-item-bearing email "duplicate" — the bug this finding covers.
+    const photoIncoming = incoming({
+      id: "photo-row",
+      createdAt: "2026-03-05T10:00:00.000Z",
+      sourceType: "photo",
+      hasLineItems: false,
+    });
+    const emailCandidate = candidate({
+      id: "email-row",
+      createdAt: "2026-03-05T10:05:00.000Z",
+      sourceTypes: ["gmail"],
+      hasLineItems: true,
+    });
+    const resolution = resolveDedupe(photoIncoming, [emailCandidate]);
+    expect(resolution).toMatchObject({
+      outcome: "merge",
+      survivor: { id: "email-row" },
+      duplicate: { id: "photo-row" },
+    });
+  });
+
+  it("inverse ordering: still resolves correctly when the incoming side is the one with line items", () => {
+    const emailIncoming = incoming({
+      id: "email-row",
+      createdAt: "2026-03-05T10:05:00.000Z",
+      sourceType: "gmail",
+      hasLineItems: true,
+    });
+    const photoCandidate = candidate({
+      id: "photo-row",
+      createdAt: "2026-03-05T10:00:00.000Z",
+      sourceTypes: ["photo"],
+      hasLineItems: false,
+    });
+    const resolution = resolveDedupe(emailIncoming, [photoCandidate]);
+    expect(resolution).toMatchObject({
+      outcome: "merge",
+      survivor: { id: "email-row" },
+      duplicate: { id: "photo-row" },
     });
   });
 });

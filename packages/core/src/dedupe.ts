@@ -29,9 +29,18 @@
  *     sources describing one purchase both print the same stated total, so
  *     there is no arithmetic between them to be off by (Review invariant 17).
  *
- * Plus two vetoes, which can only *prevent* a merge, never cause one (the
+ * Plus three vetoes, which can only *prevent* a merge, never cause one (the
  * key stays merchant + date + total):
  *
+ *   - unknown provenance: a candidate with zero `receipt_sources` rows
+ *     never merges. Empty means UNKNOWN provenance, not DIFFERENT
+ *     provenance — the design's "NULL never matches" principle applies
+ *     here exactly as it does to the key fields. A candidate can be
+ *     source-link-less between its key-field `UPDATE` and its own
+ *     `linkOrMerge` call (queue retry, a thrown batch), or via a
+ *     backfill/import path that never wrote a `receipt_sources` row;
+ *     reading that as "provenance provably differs" merges (and deletes)
+ *     two genuinely distinct receipts (review round 1, finding 1).
  *   - different source types only: a candidate that already carries a
  *     `receipt_sources` row of the incoming source's type never merges.
  *     Two photos of "the same" purchase are far more likely two real
@@ -67,8 +76,16 @@ export interface DedupeCandidate extends DedupeReceiptLike {
   id: string;
   createdAt: string;
   /** Every `sources.type` already linked to this receipt via
-   * `receipt_sources` — the same-source-type veto reads this list. */
+   * `receipt_sources` — the same-source-type veto reads this list. An
+   * EMPTY array means UNKNOWN provenance (no `receipt_sources` row has
+   * been persisted for this candidate yet), never DIFFERENT provenance —
+   * the unknown-provenance veto (see the module comment) fires on it. */
   sourceTypes: readonly SourceType[];
+  /** Whether this candidate already carries committed `line_items` rows.
+   * Read by `selectSurvivor` so the side already holding real, committed
+   * data is preferred as the merge survivor rather than deleted as the
+   * "duplicate" (review round 1, finding 3). */
+  hasLineItems: boolean;
 }
 
 /** The receipt whose extraction just completed and is being persisted. */
@@ -76,6 +93,10 @@ export interface IncomingReceipt extends DedupeReceiptLike {
   id: string;
   createdAt: string;
   sourceType: SourceType;
+  /** See `DedupeCandidate.hasLineItems` — almost always `false` for a
+   * freshly-extracted receipt, but the caller computes it rather than
+   * this module assuming it (a re-extraction/backfill could differ). */
+  hasLineItems: boolean;
 }
 
 /** A minimal shape for deterministic survivor selection — both
@@ -83,6 +104,9 @@ export interface IncomingReceipt extends DedupeReceiptLike {
 export interface SurvivorCandidate {
   id: string;
   createdAt: string;
+  /** The side already carrying committed line items is preferred as the
+   * survivor — see `selectSurvivor`. */
+  hasLineItems: boolean;
 }
 
 /**
@@ -99,6 +123,7 @@ export type MatchDecision =
   | "date-mismatch"
   | "total-null"
   | "total-mismatch"
+  | "source-types-unknown"
   | "same-source-type"
   | "payment-last4-mismatch";
 
@@ -186,6 +211,13 @@ export function matchDecision(
   if (candidate.totalCents === null || incoming.totalCents === null) return "total-null";
   if (candidate.totalCents !== incoming.totalCents) return "total-mismatch";
 
+  // An empty sourceTypes list is UNKNOWN provenance (no receipt_sources row
+  // persisted for this candidate yet), not DIFFERENT provenance — apply the
+  // same "NULL never matches" principle the key fields already get above.
+  // Reading [] as "no source type in common" is what let two genuinely
+  // distinct same-day, same-total, same-shop receipts merge (review round
+  // 1, finding 1); an unknown-provenance candidate must never merge.
+  if (candidate.sourceTypes.length === 0) return "source-types-unknown";
   if (candidate.sourceTypes.includes(incoming.sourceType)) return "same-source-type";
 
   if (
@@ -199,10 +231,29 @@ export function matchDecision(
   return "merge";
 }
 
-/** Deterministic, testable survivor selection: older `created_at` wins; on
- * a tie, the lexicographically lower `id`. ISO 8601 timestamps sort
- * chronologically as plain strings, so string comparison is exact. */
+/** Deterministic, testable survivor selection: the side already carrying
+ * committed `line_items` wins first, regardless of `created_at`; only when
+ * that is tied (both or neither hold line items) does older `created_at`
+ * decide, with a lexicographically-lower `id` as the final tiebreak. ISO
+ * 8601 timestamps sort chronologically as plain strings, so string
+ * comparison is exact.
+ *
+ * The line-items preference comes first because it is not just a
+ * tiebreak — in the canonical photo flow the photo `receipts` row is
+ * created at upload (before extraction), so it is *always* the older row,
+ * while the email side is the one that gets its line items committed
+ * first (STON-6 persists synchronously; STON-5's photo extraction
+ * completes later, asynchronously). Picking purely on `created_at` would
+ * make the photo the survivor and the email — the side already holding
+ * real, committed data — the "duplicate", which `linkOrMerge` then
+ * refuses to delete: the merge always refuses in its own primary flow
+ * (review round 1, finding 3). Preferring the line-items side as survivor
+ * is what makes the duplicate the childless side, so the merge can
+ * actually proceed. */
 export function selectSurvivor(a: SurvivorCandidate, b: SurvivorCandidate): SurvivorCandidate {
+  if (a.hasLineItems !== b.hasLineItems) {
+    return a.hasLineItems ? a : b;
+  }
   if (a.createdAt !== b.createdAt) {
     return a.createdAt < b.createdAt ? a : b;
   }
