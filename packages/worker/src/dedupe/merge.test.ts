@@ -767,3 +767,82 @@ describe("I: a line item landing on the duplicate mid-race aborts the whole batc
     expect(survivorRow?.store_location).toBeNull();
   });
 });
+
+// Test J: statement order inside the batch actually matters (round 2
+// review) — through the real linkOrMerge path, not Test B's raw-SQL schema
+// backstop. In every other test in this file the duplicate (the row
+// deleted by statement 4) enters the merge with zero receipt_sources rows,
+// because it never went through its own linkOrMerge call first — so
+// statement 1's re-point is a no-op there and DELETE-first would never
+// trip ON DELETE RESTRICT even with the statements swapped. That made
+// every other test blind to the ordering: mutation testing proved swapping
+// statements 1 and 4 leaves all of them green.
+//
+// This is the missing case: the *candidate* already has a real,
+// external_id-bearing receipt_sources row from its own earlier linkOrMerge
+// call, and the *incoming* receipt already carries committed line items
+// (a re-extraction/backfill — see linkOrMerge's incomingHasLineItems
+// comment), so selectSurvivor's line-items preference makes incoming the
+// survivor and the already-linked candidate the duplicate. Statement 1
+// must re-point that real row before statement 4 deletes the candidate, or
+// the delete collides with receipt_sources.receipt_id's ON DELETE
+// RESTRICT and the whole batch aborts.
+describe("J: re-pointing a real, external_id-bearing receipt_sources row is load-bearing (statement-order proof, real path)", () => {
+  it("moves the candidate's gmail link onto the incoming survivor and deletes the candidate", async () => {
+    // The candidate already exists and already went through its own
+    // linkOrMerge call, so it carries a real receipt_sources row with a
+    // real external_id — not the source-link-less duplicate every other
+    // test in this file uses.
+    const candidateId = await insertReceipt({
+      merchantRaw: "Trader Joe's",
+      merchantNormalized: "Trader Joe's",
+      purchasedAt: "2026-07-05",
+      totalCents: 4_312,
+      createdAt: "2026-01-01T00:00:00.000Z",
+    });
+    const candidateLink = await linkOrMerge(DB, {
+      receiptId: candidateId,
+      sourceId: gmailSourceId,
+      sourceType: "gmail",
+      externalId: "gmail-msg-repoint-proof",
+    });
+    expect(candidateLink).toMatchObject({ merged: false, finalReceiptId: candidateId });
+
+    // The incoming receipt already carries committed line items (a
+    // re-extraction/backfill scenario, not the fresh-extraction default) —
+    // this is what makes selectSurvivor pick incoming as survivor despite
+    // it being the newer row, so the *candidate* is the one re-pointed and
+    // deleted rather than the reverse (which every other test exercises).
+    const incomingId = await insertReceipt({
+      merchantRaw: "TRADER JOE'S #123",
+      merchantNormalized: "TRADER JOE'S #123",
+      purchasedAt: "2026-07-05",
+      totalCents: 4_312,
+      createdAt: "2026-01-01T00:00:01.000Z",
+    });
+    await insertLineItem(incomingId, "PRE-COMMITTED ITEM");
+
+    const result = await linkOrMerge(DB, {
+      receiptId: incomingId,
+      sourceId: photoSourceId,
+      sourceType: "photo",
+      externalId: null,
+    });
+
+    expect(result.merged).toBe(true);
+    expect(result.finalReceiptId).toBe(incomingId);
+    expect(result.refusedReason).toBeNull();
+
+    expect(await countReceipts([incomingId, candidateId])).toBe(1);
+    // The survivor's own photo link, plus the candidate's re-pointed gmail
+    // link — proof statement 1 actually moved a real row, not a no-op.
+    expect(await countReceiptSources(incomingId)).toBe(2);
+
+    const repointedLink = await DB.prepare(
+      `SELECT receipt_id FROM receipt_sources WHERE external_id = ?`,
+    )
+      .bind("gmail-msg-repoint-proof")
+      .first<{ receipt_id: string }>();
+    expect(repointedLink?.receipt_id).toBe(incomingId);
+  });
+});

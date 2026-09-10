@@ -54,6 +54,19 @@
  * rather than picking one — the caller must leave every receipt standing.
  * The rule fails toward a visible duplicate, never toward destroying a real
  * receipt.
+ *
+ * That "two candidates matching" count is taken *after* the two provenance
+ * vetoes above run, not before — `matchDecision` folds them into the same
+ * per-candidate `"merge"`/not verdict as the key fields, so a candidate a
+ * veto disqualifies simply leaves the match set rather than being counted
+ * separately. This means the vetoes don't just block individual merges,
+ * they change what "matching" means for the collision count itself: a pair
+ * of candidates that would have been `ambiguous` (2 matches, nothing
+ * merged) had both been eligible can resolve to exactly one match — and
+ * merge — once one of them is vetoed for unknown provenance or a
+ * same-source-type conflict. Nothing here is wrong; it just means
+ * "ambiguous" is a statement about the *eligible* candidate set, not the
+ * raw one.
  */
 
 import { DEDUPE_DATE_WINDOW_DAYS } from "./config.js";

@@ -119,7 +119,23 @@ export interface LinkOrMergeInput {
   receiptId: string;
   sourceId: string;
   sourceType: SourceType;
-  /** Gmail message ID (or equivalent); `null` for the photo path. */
+  /** Gmail message ID (or equivalent); `null` for the photo path.
+   *
+   * PRECONDITION (caller's responsibility): this must not already be bound
+   * — via an existing `receipt_sources` row — to a receipt other than
+   * `receiptId`, unless the caller genuinely intends to move that link.
+   * `ensureSourceLinkStatement`'s `ON CONFLICT (external_id) ... DO UPDATE`
+   * re-points the existing row silently, on both the no-merge path and
+   * inside the merge batch: no error, `merged: false`,
+   * `refusedReason: null`. If that row was the other receipt's *only*
+   * `receipt_sources` link, that receipt is left with zero — and the
+   * unknown-provenance veto (`packages/core/src/dedupe.ts`) then refuses
+   * it as a merge candidate from then on, permanently. Not reachable in
+   * this ticket (no caller exists yet); STON-6, which will be the first
+   * real caller passing a non-null `externalId`, must guarantee this
+   * precondition itself (e.g. resolve its own idempotency lookup to the
+   * same `receiptId` before calling `linkOrMerge`) rather than discover it
+   * the hard way. */
   externalId: string | null;
 }
 
