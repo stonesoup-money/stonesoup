@@ -58,20 +58,20 @@ export function dataPromiseMarkdown(ctx: LegalContext): string {
 
 Stone Soup's whole reason to exist is a high-quality, honestly-collected labeled dataset of receipt line items. That only works if the promise about what leaves your machine is exact, not marketing. This page is that exactness.
 
-**Nothing described on this page has happened yet.** This codebase contains no golden-set write path, no submission client, no central submission database, and no published dataset. Sentences describing behaviour that does not exist carry the marker ${UNBUILT_MARKER} at the point of the claim, and \`docs/privacy-claims.md\` is the row-by-row status of every one of them. The design is published here before any label is collected, because a promise made afterwards is worth nothing.
+**The local half of this page is real; the submission half has not happened yet.** This codebase writes a \`golden_set\` row on this instance when you confirm or correct a line item's category — see "The local record" below. It still contains no submission client, no central submission database, and no published dataset, so no label has ever left this instance. Sentences describing behaviour that does not exist carry the marker ${UNBUILT_MARKER} at the point of the claim, and \`docs/privacy-claims.md\` is the row-by-row status of every one of them. The design is published here before any label is collected, because a promise made afterwards is worth nothing.
 
 ## The local record
 
-When you review a line item and confirm or correct its category, this instance writes one row to its own \`golden_set\` table ${UNBUILT_MARKER}. That row is local — it is this instance's own review history and quality-control record, not the submission payload described below — and the table, which does exist in this instance's schema today, holds:
+When you review a line item and confirm or correct its category, this instance writes one row to its own \`golden_set\` table. That row is local — it is this instance's own review history and quality-control record, not the submission payload described below — and the table holds:
 
 - **The raw line text**, exactly as printed on the receipt or in the order confirmation.
-- **Merchant type** — a category like "grocery" or "pharmacy", not the merchant's name.
+- **Merchant type** — a category like "grocery" or "pharmacy", not the merchant's name ${UNBUILT_MARKER}: this instance does not classify merchants yet, so this column is always empty today.
 - **The model's guess**: its proposed category, subcategory, and confidence score.
 - **Your verdict**: confirmed, corrected, or skipped, and the corrected category and subcategory if you changed them.
 - **\`labeler\`** — an internal identifier for who made the labeling decision, kept for this instance's own quality control. It is not stripped when the record is written; see "The two boundaries" below for why, and for how it is handled before anything is submitted.
 - **The routing reason** this item was surfaced for review (for example, low confidence, or a random audit).
 - **\`taxonomy_version\` and \`schema_version\`** — which version of the category list and the record format produced this row.
-- **\`split\`** — whether this record is assigned to the training, validation, or held-out test set, assigned once and never changed afterward.
+- **\`split\`** — whether this record is assigned to the training, validation, or held-out test set, assigned once and never changed afterward ${UNBUILT_MARKER}: nothing assigns it yet, so it is always empty today.
 - **An internal row ID, and the timestamp the row was written** (\`created_at\`) — this instance's own bookkeeping, not data designed to leave it. See "What actually leaves your machine" below for why the timestamp specifically stays local.
 
 ## What never leaves your machine
