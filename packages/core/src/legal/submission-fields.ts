@@ -1,22 +1,31 @@
 /**
- * The golden-set submission field allowlist — pure metadata, three lists
- * of column *names*, nothing else. This module contains no code that
- * reads a `golden_set` row, constructs a payload, pseudonymizes a value,
- * or talks to any endpoint; it exists solely so /data-promise's "what
- * actually leaves your machine" claim and its evidence table row can be
- * checked by a test against the real schema (review round 1, finding 3),
- * the same way the STON-13 gate's read-only `PRAGMA table_info` check
- * already does for the "what never leaves" claim. Writing the submission
- * client itself is STON-9 and is human-gated — this file is prose about
- * field names, not that client.
+ * What the golden-set submission payload may contain — pure metadata,
+ * name lists and nothing else. This module contains no code that reads a
+ * `golden_set` row, constructs a payload, pseudonymizes a value, filters
+ * a row, or talks to any endpoint; it exists solely so /data-promise's
+ * "what actually leaves your machine" claim and its evidence table row
+ * can be checked by a test against the real schema (review round 1,
+ * finding 3), the same way the STON-13 gate's read-only
+ * `PRAGMA table_info` check already does for the "what never leaves"
+ * claim. Writing the submission client itself is STON-9 and is
+ * human-gated — this file is prose about names, not that client.
  *
- * Every `golden_set` column (see migrations/0001_initial_schema.sql) must
- * appear in exactly one of the three lists below. That invariant is
- * enforced by packages/worker/src/public/policy-claims.test.ts against a
- * live `PRAGMA table_info(golden_set)` result — a column added to the
- * table with no entry here fails `pnpm check` instead of silently riding
- * along in (or silently being left out of) the description of what
- * leaves this instance.
+ * Two different questions, kept deliberately apart:
+ *
+ *   - **Which columns of a submitted row may leave** — the first three
+ *     lists below (allowlisted / pseudonymized / excluded). Every
+ *     `golden_set` column (see migrations/0001_initial_schema.sql) must
+ *     appear in exactly one of them. That invariant is enforced by
+ *     packages/worker/src/public/policy-claims.test.ts against a live
+ *     `PRAGMA table_info(golden_set)` result — a column added to the
+ *     table with no entry here fails `pnpm check` instead of silently
+ *     riding along in (or silently being left out of) the description of
+ *     what leaves this instance.
+ *   - **Which rows may be submitted at all** —
+ *     `GOLDEN_SET_SUBMISSION_EXCLUDED_VERDICTS`, last in this file. It is
+ *     not part of the column exhaustiveness invariant above and must not
+ *     be folded into it; see its own comment for why /data-promise's
+ *     escape hatch depends on it.
  */
 
 /**
