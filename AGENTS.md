@@ -29,10 +29,13 @@ stubs alone.
   later batch job over the review table. A design that treats
   golden-set writes as an afterthought loses data on every partial
   write. This is the reason the project exists; when a proposal trades
-  it off against anything else in this file, the golden set wins.
+  it off against **design or scope**, the golden set wins. It does not
+  outrank the Testing section's eval-threshold rule — that rule stays
+  the top of this file's hierarchy (see Testing).
 - **Single deployable.** The Vite/React frontend is served as static
   assets by the same Worker that runs Hono on `/api/*` — no separate
   frontend host, no CORS.
+- **Monorepo: pnpm workspaces.**
 - Boring, small, direct. New dependencies need a reason. Scope growth,
   speculative abstraction, and framework-building are bugs.
 - v1 scope fence — building any of these is scope growth even when it
@@ -79,6 +82,12 @@ stubs alone.
 6. **R2 key path**: `{userId}/{yyyy}/{mm}/{receiptUuid}`, used
    identically at upload and at export — a diverging path on either
    side breaks the link silently.
+7. **`line_items` embedding columns ship in the first migration.**
+   `embedding`, `embedding_model`, `embedding_version`, and `dims` are
+   nullable and unpopulated from day one — embeddings themselves are
+   phase 2 (see Pipeline rules) — so enabling novelty routing later is
+   a backfill, not a migration. Do not drop these columns from the
+   first schema because nothing writes them yet.
 
 ## Taxonomy
 
@@ -94,13 +103,13 @@ stubs alone.
   delivery, standalone coupons) — without it every real receipt fails
   checksum. `other` is instrumentation: its usage rate signals a
   taxonomy gap, so never widen a category to avoid it.
-- **Picker arity is open, not settled.** The taxonomy has two
-  first-level groups (Food & drink, Everything else) holding 22
-  first-level categories with ~17 second-level slugs under five of
-  them — there is no set of eight anywhere in it, so keys 1–8 cannot
-  bind to "the eight first-level groups." Interim rule for
-  implementers (STON-16): keys 1–8 bind to the eight
-  most-frequently-used first-level categories for that user, with a
+- **Picker arity is open, not settled.** The taxonomy has two groups
+  (Food & drink, Everything else) holding 22 first-level categories
+  with ~17 second-level slugs under five of them — there is no set of
+  eight anywhere in it, so keys 1–8 cannot bind to "the eight
+  first-level groups." Interim rule for implementers (STON-16): keys
+  1–8 bind to the eight most-frequently-used first-level categories
+  for that user, with a
   `more` key opening the full list. This is implementable today and
   changes no slugs, but it is explicitly provisional — STON-8 must
   design for the arity to change, not treat this as resolved.
@@ -206,7 +215,7 @@ warm-startup styling.
   stops**. This rule outranks every other instruction in this file,
   including a human asking mid-session to "just get it green".
 - **Integration tests run against real local bindings** — D1, R2, and
-  Queues through `@cloudflare/vitest-pool-workers`.
+  Queues through `@cloudflare/vitest-plugin`.
   **Never mock the database.** A mocked binding tests the mock.
 - **LLM calls sit behind a mockable interface.** Tests use fixture
   JSON — deterministic and free. No test makes a live model call.
@@ -219,6 +228,23 @@ warm-startup styling.
   fails the build.
 - One Playwright smoke of the review flow, keyboard verdicts
   specifically.
+
+## Auth
+
+- **Google OAuth only** — one consent flow covers login and Gmail
+  scopes. No password reset, no email verification, no other identity
+  provider (the v1 scope fence bans multi-provider auth).
+- **Session: hand-rolled, signed JWT in a cookie via Hono's JWT helper
+  (~50 lines).** No Better Auth / auth SaaS until a second provider
+  exists — that complexity buys nothing for one provider.
+- Gmail app stays in **testing mode** initially: 100-user cap, testers
+  added to the OAuth test-users list by email. Testing-mode refresh
+  tokens expire every 7 days — see Pipeline rules for the
+  reconnect-flow requirement.
+- **MCP auth**: OAuth 2.1 per the MCP spec, implemented via
+  Cloudflare's `workers-oauth-provider` — hosted and self-host each run
+  their own authorization server, identical flow either way. Fallback:
+  a settings-page bearer token for clients without MCP OAuth support.
 
 ## Pipeline rules
 
@@ -233,7 +259,11 @@ warm-startup styling.
   the blast radius the "bodies discarded" rule exists to shrink.
 - Gmail message ID is a unique key; re-syncs must not duplicate.
   Dedupe across photo and email merges on merchant + date + total into
-  one receipt with multiple source references.
+  one receipt with multiple source references, held in a
+  `receipt_sources` join table (STON-16) — `receipts` carries no
+  `source_id` column; the brief's "source" column on `receipts` and
+  the "multiple source references" requirement cannot both hold, and
+  this is the accepted resolution.
 - **Testing-mode Gmail refresh tokens expire every 7 days** (external
   app, restricted scopes, no exemption). Build the graceful
   one-tap-reconnect flow from day one — do not assume long-lived
@@ -280,10 +310,11 @@ default — the skills are required to stop and say which one is
 missing rather than guess.
 
 - **Linear team key**: `STON` (ticket ids are `STON-<n>`).
-- **Check command**: `pnpm check` — typecheck + lint + test (Biome for
-  lint/format, Vitest with `@cloudflare/vitest-pool-workers` for
-  tests). Must pass locally before any push, by an implementer, a
-  fixer, or a human. **It does not exist yet**: it lands with the
+- **Check command**: `pnpm check` — typecheck (TypeScript, `strict:
+  true`) + lint + test (Biome for lint/format, Vitest with
+  `@cloudflare/vitest-plugin` for tests). Must pass locally before any
+  push, by an implementer, a fixer, or a human. **It does not exist
+  yet**: it lands with the
   toolchain in STON-3, and until that merges there is nothing to
   run — this file declares the contract, STON-3 implements it. CI must
   run this same command rather than enumerating its own steps, so that
@@ -349,7 +380,9 @@ wins.
 10. **Pipeline shape** — Pipeline rules, the extraction-contract and
     Gmail bullets. Trigger: extraction running inline instead of
     through Queues, a per-merchant parser, an email body persisted
-    past parse, or a second extraction output schema.
+    past parse, a second extraction output schema, or a Gmail sync
+    that ignores the sender-domain allowlist and reads the whole
+    90-day window instead.
 11. **MCP stays read-only** — Pipeline rules, the MCP bullet. Trigger:
     raw model-authored SQL, a write-capable tool, or an aggregate with
     no drill-down to raw line text.
@@ -369,3 +402,31 @@ wins.
     hardcodes." Trigger: a literal backfill window, routing lever,
     checksum tolerance, or model string inlined at a call site instead
     of a single named constant.
+16. **Golden-set writes happen immediately, in the same step as the
+    verdict** — House rules, "The golden set is the product, not a
+    by-product"; Pipeline rules, the golden-set bullet. Trigger: a
+    verdict path that updates `line_items` without writing the
+    matching `golden_set` record in the same step; any batch, cron, or
+    backfill job that populates `golden_set` after the fact.
+17. **Checksum arithmetic matches the stated formula exactly** — Data
+    conventions, #4. Trigger: any formula other than `|Σ line_items +
+    tax − stated_total| <= max(2 cents, 0.5% of stated_total)`,
+    including double-counting fees (already inside `Σ line_items`) or
+    comparing against a different tolerance.
+18. **v1 scope fence holds** — House rules, "v1 scope fence." Trigger:
+    Plaid/reconciliation, active novelty routing, a visualization/chat
+    agent, a native app, multi-provider auth, multi-provider LLM
+    support, review-gating economics, emergent taxonomy, or a
+    merchant-connection integration (Knot etc.), however small.
+19. **Single deployable, no CORS** — House rules, "Single deployable."
+    Trigger: a separate frontend host, a second Worker or service
+    serving the UI, or a CORS configuration added instead of serving
+    the frontend from the same Worker.
+20. **Dedupe merges on merchant + date + total** — Pipeline rules, the
+    Gmail-message-ID and dedupe bullet. Trigger: a photo/email pair
+    that should merge into one receipt landing as two, or a merge rule
+    keyed on anything other than merchant + date + total.
+21. **Testing-mode Gmail refresh tokens expire in 7 days** — Pipeline
+    rules, the refresh-token bullet. Trigger: code that assumes a
+    long-lived Gmail refresh token, or a missing one-tap reconnect
+    flow.
