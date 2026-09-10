@@ -1,0 +1,27 @@
+.upload-form {
+  max-width: 28rem;
+  margin: 0 auto;
+  padding: 1rem;
+  font-family: var(--font-display);
+  border-bottom: var(--rule-hairline);
+}
+
+.upload-form__input {
+  display: block;
+  width: 100%;
+  font-family: var(--font-display);
+  padding: 0.75rem;
+  border: var(--rule-hairline);
+  background: var(--color-paper);
+  color: var(--color-ink);
+}
+
+.upload-form__status {
+  margin-top: 0.5rem;
+  font-size: 0.85rem;
+  color: var(--color-thermal-grey);
+}
+
+.upload-form__status--error {
+  color: var(--color-ledger-red);
+}

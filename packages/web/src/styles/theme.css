@@ -1,0 +1,39 @@
+/*
+ * SPA entry stylesheet. `packages/web/public/tokens.css` is canonical and
+ * already `<link>`ed once, verbatim, from `index.html` (STON-13) — this
+ * file never redeclares the palette or fonts, only base layout that
+ * *uses* the tokens it already defines (AGENTS.md: "consumed, never
+ * redeclared").
+ *
+ * Decision recorded per STON-2's plan (§4): this checkout has no
+ * Tailwind dependency, and `tokens.css`'s header comment flags its own
+ * `@theme inline` snippet as unverified. Rather than adding Tailwind and
+ * proving that snippet compiles, this ticket takes the design language's
+ * own stated fallback — "a plain `var()` reference in a component ... is
+ * an acceptable outcome" — and reaches for CSS custom properties
+ * directly everywhere (see review.css, dialog.css, upload.css). No
+ * second copy of the hexes exists anywhere in packages/web; the single
+ * `<link>` in index.html stays the one source, so the SPA and the
+ * Worker-rendered public pages keep loading the byte-identical file.
+ * Revisit if a later ticket wants generated Tailwind utilities badly
+ * enough to prove the snippet out.
+ */
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--color-paper);
+  color: var(--color-ink);
+  font-family: var(--font-display);
+}
+
+a {
+  color: var(--color-ink);
+}
+
+button {
+  font-family: inherit;
+}

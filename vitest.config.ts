@@ -31,7 +31,37 @@ export default defineConfig({
             // must be off, not merely unused-in-tests.
             remoteBindings: false,
             miniflare: {
-              bindings: { TEST_MIGRATIONS: workerMigrations },
+              bindings: {
+                TEST_MIGRATIONS: workerMigrations,
+                // Round 2, finding 1 (Review invariant 6): `queue()` in
+                // packages/worker/src/index.ts always built a real
+                // Anthropic client from `env.ANTHROPIC_API_KEY`, and the
+                // Workers Vitest pool loads that key from a contributor's
+                // own `.dev.vars` — so any test that reaches `queue()`
+                // could fire a live vision call on a contributor's own
+                // key. This binding is the positive test-mode signal
+                // `index.ts` checks before resolving its extraction
+                // client — never present in `wrangler.jsonc` or
+                // `.dev.vars`, so the swap to a fixture client is
+                // structural, not a guess from an absent key.
+                EXTRACTION_TEST_FIXTURE_CLIENT: "1",
+              },
+              // Round 2, finding 4: `upload.test.ts`'s `POST
+              // /api/receipts` calls enqueue onto `EXTRACTION_QUEUE`, and
+              // Miniflare's local queue simulator auto-delivers those
+              // messages to the real `queue()` consumer in the same
+              // instance — racing the test's own follow-up status reads
+              // and making `expect(status).toBe("pending")` ~10% flaky.
+              // Redirecting this project's `EXTRACTION_QUEUE` producer to
+              // a queue name with no consumer anywhere in
+              // `wrangler.jsonc` makes every worker test's `.send()` land
+              // nowhere, deterministically, instead of racing on timing.
+              // `consumer.test.ts` is unaffected — it calls
+              // `processExtractionJob` directly, never through this
+              // producer binding.
+              queueProducers: {
+                EXTRACTION_QUEUE: { queueName: "stonesoup-extraction-test-unconsumed" },
+              },
             },
           }),
         ],

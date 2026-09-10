@@ -2,20 +2,20 @@
 
 Stone Soup's whole reason to exist is a high-quality, honestly-collected labeled dataset of receipt line items. That only works if the promise about what leaves your machine is exact, not marketing. This page is that exactness.
 
-**Nothing described on this page has happened yet.** This codebase contains no golden-set write path, no submission client, no central submission database, and no published dataset. Sentences describing behaviour that does not exist carry the marker *(design — not yet built; see docs/privacy-claims.md)* at the point of the claim, and `docs/privacy-claims.md` is the row-by-row status of every one of them. The design is published here before any label is collected, because a promise made afterwards is worth nothing.
+**The local half of this page is real; the submission half has not happened yet.** This codebase writes a `golden_set` row on this instance when you confirm, correct, or skip a line item during review — see "The local record" below. It still contains no submission client, no central submission database, and no published dataset, so no label has ever left this instance. Sentences describing behaviour that does not exist carry the marker *(design — not yet built; see docs/privacy-claims.md)* at the point of the claim, and `docs/privacy-claims.md` is the row-by-row status of every one of them. The design is published here before any label is collected, because a promise made afterwards is worth nothing.
 
 ## The local record
 
-When you review a line item and confirm or correct its category, this instance writes one row to its own `golden_set` table *(design — not yet built; see docs/privacy-claims.md)*. That row is local — it is this instance's own review history and quality-control record, not the submission payload described below — and the table, which does exist in this instance's schema today, holds:
+When you review a line item and confirm, correct, or skip it, this instance writes one row to its own `golden_set` table. That row is local — it is this instance's own review history and quality-control record, not the submission payload described below — and the table holds:
 
 - **The raw line text**, exactly as printed on the receipt or in the order confirmation.
-- **Merchant type** — a category like "grocery" or "pharmacy", not the merchant's name.
+- **Merchant type** — a category like "grocery" or "pharmacy", not the merchant's name *(design — not yet built; see docs/privacy-claims.md)*: this instance does not classify merchants yet, so this column is always empty today.
 - **The model's guess**: its proposed category, subcategory, and confidence score.
 - **Your verdict**: confirmed, corrected, or skipped, and the corrected category and subcategory if you changed them.
 - **`labeler`** — an internal identifier for who made the labeling decision, kept for this instance's own quality control. It is not stripped when the record is written; see "The two boundaries" below for why, and for how it is handled before anything is submitted.
 - **The routing reason** this item was surfaced for review (for example, low confidence, or a random audit).
 - **`taxonomy_version` and `schema_version`** — which version of the category list and the record format produced this row.
-- **`split`** — whether this record is assigned to the training, validation, or held-out test set, assigned once and never changed afterward.
+- **`split`** — whether this record is assigned to the training, validation, or held-out test set, assigned once and never changed afterward *(design — not yet built; see docs/privacy-claims.md)*: nothing assigns it yet, so it is always empty today.
 - **An internal row ID, and the timestamp the row was written** (`created_at`) — this instance's own bookkeeping, not data designed to leave it. See "What actually leaves your machine" below for why the timestamp specifically stays local.
 
 ## What never leaves your machine
@@ -43,7 +43,9 @@ It never contains the local row's own **ID**, **`created_at`**, or **`submitted_
 
 ## The detail most privacy pages gloss over
 
-The raw line text is designed to be submitted **exactly as printed** *(design — not yet built; see docs/privacy-claims.md)* — that is the entire point of a golden set built from real receipts, and a paraphrased or normalized line would train a model on data that does not look like the real thing. Be aware that a printed receipt line often carries its own price alongside the item name ("ORGANIC BANANAS 1.24 LB @ .79/LB"), and, less often, promotional or loyalty text. The client-side filter described below is designed to screen out the categories of line most likely to be sensitive *(design — not yet built; see docs/privacy-claims.md)*, but it screens for *pattern*, not for a guarantee that no printed line ever surprises you. If you see something on a receipt you would rather not contribute at all, skip that item during review instead of confirming or correcting it — a skipped item is never sent.
+The raw line text is designed to be submitted **exactly as printed** *(design — not yet built; see docs/privacy-claims.md)* — that is the entire point of a golden set built from real receipts, and a paraphrased or normalized line would train a model on data that does not look like the real thing. Be aware that a printed receipt line often carries its own price alongside the item name ("ORGANIC BANANAS 1.24 LB @ .79/LB"), and, less often, promotional or loyalty text. The client-side filter described below is designed to screen out the categories of line most likely to be sensitive *(design — not yet built; see docs/privacy-claims.md)*, but it screens for *pattern*, not for a guarantee that no printed line ever surprises you. If you see something on a receipt you would rather not contribute at all, skip that item during review instead of confirming or correcting it — a skipped item is never sent off this instance. It is still written down here, though, and the difference matters enough to spell out.
+
+**What a skip does, exactly.** Skipping is a boundary guarantee, not an erasure. This instance writes a `golden_set` row for a skip just as it does for a confirmation or a correction, raw line text included, because a reviewer's "not this one" is a decision worth keeping and a skip that recorded nothing left that work unrecoverable — see "The local record" above. What the skip governs is what crosses this instance's boundary: nothing crosses it today by any path, and the submission client, when it is built, is required to leave every row whose verdict is `skipped` out of the payload entirely — not redacted, not stripped of its raw text, simply not submitted *(design — not yet built; see docs/privacy-claims.md)*. That requirement is recorded in this repository alongside the payload's own field allowlist, so it is a condition the submission code has to satisfy rather than a detail someone has to remember. "The two boundaries" below is the general shape of the same distinction.
 
 ## The client-side filter
 

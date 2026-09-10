@@ -1,0 +1,134 @@
+/* The review card — the one bold, custom-built element (AGENTS.md, Design
+ * language): a receipt strip, mono raw line on thermal white, a
+ * perforated top edge, verdict stamps. Never a themed shadcn Card. Every
+ * color and rule below is a token from packages/web/public/tokens.css —
+ * no hex, no rgb(), no named color, no pixel literal (scripts/verify-design-tokens.mjs). */
+
+.review-deck {
+  max-width: 28rem;
+  margin: 0 auto;
+  padding: 1rem;
+  font-family: var(--font-display);
+}
+
+.review-empty {
+  text-align: center;
+  padding: 3rem 1rem;
+  color: var(--color-thermal-grey);
+}
+
+.review-card {
+  background: var(--color-paper);
+  border-left: var(--rule-margin);
+  box-shadow: 0 0 0 1px var(--color-ledger-blue);
+}
+
+.review-card__perforation {
+  height: 0.6rem;
+  background-image: repeating-radial-gradient(
+    circle at 0.5rem 50%,
+    var(--color-paper) 0 0.2rem,
+    var(--color-ledger-blue) 0.2rem 0.25rem
+  );
+  background-size: 1rem 100%;
+}
+
+.review-card__body {
+  padding: 1rem 1.25rem;
+}
+
+.review-card__meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.5rem;
+  color: var(--color-thermal-grey);
+  font-size: 0.8rem;
+  margin-bottom: 0.5rem;
+}
+
+.review-card__merchant {
+  font-weight: 700;
+}
+
+.review-card__raw {
+  font-family: var(--font-mono);
+  white-space: pre-wrap;
+  word-break: break-word;
+  border-bottom: var(--rule-hairline);
+  padding-bottom: 0.75rem;
+  margin-bottom: 0.75rem;
+}
+
+.review-card__row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 0.75rem;
+}
+
+.review-card__category {
+  color: var(--color-ink);
+}
+
+.review-card__money {
+  font-family: var(--font-mono);
+  font-variant-numeric: var(--numeric-tabular);
+  text-align: right;
+  white-space: nowrap;
+}
+
+.review-card__reason {
+  margin-top: 0.5rem;
+  font-size: 0.75rem;
+  color: var(--color-thermal-grey);
+}
+
+.review-card__actions {
+  display: flex;
+  gap: 0.5rem;
+  padding: 0 1.25rem 1.25rem;
+  flex-wrap: wrap;
+}
+
+.review-card__button {
+  font-family: var(--font-display);
+  font-size: 0.85rem;
+  padding: 0.5rem 0.85rem;
+  border: var(--rule-hairline);
+  background: var(--color-paper);
+  color: var(--color-ink);
+  cursor: pointer;
+}
+
+.review-card__button--confirm {
+  border-color: var(--color-stamp-green);
+  color: var(--color-stamp-green);
+}
+
+.review-card__button--correct {
+  border-color: var(--color-ledger-red);
+  color: var(--color-ledger-red);
+}
+
+.review-card__legend {
+  margin-top: 0.75rem;
+  font-size: 0.7rem;
+  color: var(--color-thermal-grey);
+}
+
+/* Motion only answers a user action — card advance on verdict. No
+ * entrance animation anywhere in this file. */
+.review-card--advancing {
+  animation: review-card-advance 160ms ease-out forwards;
+}
+
+@keyframes review-card-advance {
+  from {
+    opacity: 1;
+    transform: translateX(0);
+  }
+  to {
+    opacity: 0;
+    transform: translateX(-1.5rem);
+  }
+}

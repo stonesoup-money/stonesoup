@@ -1,0 +1,58 @@
+/* The one vendored shadcn/Radix primitive (AGENTS.md, Design language):
+ * themed with Stone Soup's tokens, not shadcn's default zinc look. Radix
+ * is here for its focus management and keyboard nav (Escape closes,
+ * focus returns to the trigger) — the review flow's stated reason for
+ * pulling it in at all. No inline hex, no pixel literal: every value
+ * below is a token or a relative unit. */
+
+.ss-dialog-overlay {
+  position: fixed;
+  inset: 0;
+  background: color-mix(in srgb, var(--color-ink) 45%, transparent);
+}
+
+.ss-dialog-content {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  width: min(92vw, 28rem);
+  max-height: 80vh;
+  overflow-y: auto;
+  background: var(--color-paper);
+  color: var(--color-ink);
+  border-top: var(--rule-margin);
+  font-family: var(--font-display);
+}
+
+.ss-dialog-title {
+  margin: 0;
+  padding: 1rem 1.25rem 0.5rem;
+  font-size: 1.05rem;
+}
+
+.ss-dialog-list {
+  list-style: none;
+  margin: 0;
+  padding: 0 0 1rem;
+}
+
+.ss-dialog-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 0.65rem 1.25rem;
+  border: none;
+  border-bottom: var(--rule-hairline);
+  background: transparent;
+  color: var(--color-ink);
+  font-family: var(--font-display);
+  font-size: 0.95rem;
+  cursor: pointer;
+}
+
+.ss-dialog-item:hover,
+.ss-dialog-item:focus-visible {
+  background: color-mix(in srgb, var(--color-ledger-blue) 25%, transparent);
+  outline: none;
+}

@@ -83,3 +83,21 @@ export const OPERATOR_NAME_DEFAULT =
   "[[LEGAL_ENTITY — a human must fill this in before this instance serves a hosted user — see docs/privacy-claims.md]]";
 export const OPERATOR_CONTACT_DEFAULT =
   "[[CONTACT_ADDRESS — a human must fill this in before this instance serves a hosted user — see docs/privacy-claims.md]]";
+
+/**
+ * Photo upload cap (STON-2 tracer bullet). Not an env-tunable lever — a
+ * fixed guard against an oversized request, not something a deployer would
+ * ever retune — so it is a CORE_ONLY_EXPORTS entry in
+ * scripts/verify-config-single-source.mjs rather than a wrangler.jsonc var.
+ */
+export const RECEIPT_UPLOAD_MAX_BYTES = 10 * 1024 * 1024;
+
+/**
+ * The extraction *record* schema version — distinct from TAXONOMY_VERSION
+ * above and from a D1 migration number. Bumped when ExtractionResult's
+ * shape changes in a way that matters to a consumer of stored extraction
+ * data (STON-12's evals, in particular), not on every unrelated change.
+ * CORE_ONLY_EXPORTS, not a wrangler.jsonc var — same reasoning as
+ * RECEIPT_UPLOAD_MAX_BYTES above.
+ */
+export const EXTRACTION_SCHEMA_VERSION = 1;

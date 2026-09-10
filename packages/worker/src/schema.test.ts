@@ -730,3 +730,182 @@ describe("foreign keys are enforced in D1 (review round 1, finding 17; review ro
     expect(names).not.toContain("source_id");
   });
 });
+
+// Migration 0002 (STON-2 tracer bullet): receipts.merchant_raw becomes
+// write-once-from-NULL rather than immutable-from-insert — see that
+// migration's header for the full justification. These lock-ins prove the
+// new transition (NULL -> value) works and that every other transition
+// still aborts exactly as 0001's immutable-from-insert trigger did.
+describe("receipts.merchant_raw is write-once-from-NULL (migration 0002)", () => {
+  it("allows the first write from NULL", async () => {
+    const id = crypto.randomUUID();
+    await DB.prepare(`INSERT INTO receipts (id, status) VALUES (?, 'pending')`).bind(id).run();
+
+    await expect(
+      DB.prepare(
+        `UPDATE receipts SET merchant_raw = 'SAFEWAY #1', status = 'extracted' WHERE id = ?`,
+      )
+        .bind(id)
+        .run(),
+    ).resolves.toBeDefined();
+
+    const row = await DB.prepare(`SELECT merchant_raw FROM receipts WHERE id = ?`)
+      .bind(id)
+      .first<{ merchant_raw: string }>();
+    expect(row?.merchant_raw).toBe("SAFEWAY #1");
+  });
+
+  it("rejects a second write to a different value", async () => {
+    const id = crypto.randomUUID();
+    await DB.prepare(
+      `INSERT INTO receipts (id, merchant_raw, status) VALUES (?, 'SAFEWAY #1', 'extracted')`,
+    )
+      .bind(id)
+      .run();
+
+    await expect(
+      DB.prepare(`UPDATE receipts SET merchant_raw = 'SOMETHING ELSE' WHERE id = ?`).bind(id).run(),
+    ).rejects.toThrow(/immutable/);
+
+    const row = await DB.prepare(`SELECT merchant_raw FROM receipts WHERE id = ?`)
+      .bind(id)
+      .first<{ merchant_raw: string }>();
+    expect(row?.merchant_raw).toBe("SAFEWAY #1");
+  });
+
+  it("rejects reverting a set value back to NULL", async () => {
+    const id = crypto.randomUUID();
+    await DB.prepare(
+      `INSERT INTO receipts (id, merchant_raw, status) VALUES (?, 'SAFEWAY #1', 'extracted')`,
+    )
+      .bind(id)
+      .run();
+
+    await expect(
+      DB.prepare(`UPDATE receipts SET merchant_raw = NULL WHERE id = ?`).bind(id).run(),
+    ).rejects.toThrow(/immutable/);
+  });
+
+  it("allows re-writing to the same value it already holds", async () => {
+    const id = crypto.randomUUID();
+    await DB.prepare(
+      `INSERT INTO receipts (id, merchant_raw, status) VALUES (?, 'SAFEWAY #1', 'extracted')`,
+    )
+      .bind(id)
+      .run();
+
+    await expect(
+      DB.prepare(`UPDATE receipts SET merchant_raw = 'SAFEWAY #1' WHERE id = ?`).bind(id).run(),
+    ).resolves.toBeDefined();
+  });
+
+  it("rejects a status past the extraction-pending set with merchant_raw still NULL", async () => {
+    await expect(
+      DB.prepare(`INSERT INTO receipts (id, status) VALUES (?, 'extracted')`)
+        .bind(crypto.randomUUID())
+        .run(),
+    ).rejects.toThrow();
+  });
+
+  it.each(["pending", "extracting", "failed"])(
+    "allows merchant_raw NULL while status is '%s'",
+    async (status) => {
+      await expect(
+        DB.prepare(`INSERT INTO receipts (id, status) VALUES (?, ?)`)
+          .bind(crypto.randomUUID(), status)
+          .run(),
+      ).resolves.toBeDefined();
+    },
+  );
+
+  it("PRAGMA table_info(receipts) still has every 0001 column, plus no new ones beyond the shape change", async () => {
+    const result = await DB.prepare(`PRAGMA table_info(receipts)`).all<{
+      name: string;
+      notnull: number;
+    }>();
+    const byName = new Map(result.results.map((c) => [c.name, c]));
+    expect([...byName.keys()].sort()).toEqual(
+      [
+        "id",
+        "merchant_raw",
+        "merchant_normalized",
+        "store_location",
+        "purchased_at",
+        "subtotal_cents",
+        "tax_cents",
+        "total_cents",
+        "payment_last4",
+        "r2_key",
+        "status",
+        "checksum_result",
+        "checksum_delta_cents",
+        "extraction_model",
+        "extraction_input_tokens",
+        "extraction_output_tokens",
+        "extracted_at",
+        "created_at",
+        "updated_at",
+      ].sort(),
+    );
+    // The one intended nullability change.
+    expect(byName.get("merchant_raw")?.notnull).toBe(0);
+  });
+
+  it("both receipts indexes from 0001 survive the table rebuild", async () => {
+    const result = await DB.prepare(`PRAGMA index_list(receipts)`).all<{ name: string }>();
+    const names = result.results.map((i) => i.name);
+    expect(names).toContain("idx_receipts_merchant_date_total");
+    expect(names).toContain("idx_receipts_purchased_at");
+  });
+
+  it("migration 0002 leaves the FK graph intact: foreign_key_check is empty and children still resolve to the rebuilt receipts table", async () => {
+    // `PRAGMA foreign_key_check` never raises or aborts on its own (this
+    // migration's header used to claim otherwise) — this test is the real
+    // guard the header now points to: a mistake in the table-rebuild
+    // procedure (a dropped column a child implicitly depended on, a
+    // forgotten index or trigger) would show up here.
+    const violations = await DB.prepare(`PRAGMA foreign_key_check`).all();
+    expect(violations.results).toHaveLength(0);
+
+    const lineItemsFks = await DB.prepare(`PRAGMA foreign_key_list(line_items)`).all<{
+      table: string;
+      from: string;
+      to: string;
+    }>();
+    expect(lineItemsFks.results).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ table: "receipts", from: "receipt_id", to: "id" }),
+      ]),
+    );
+
+    const receiptSourcesFks = await DB.prepare(`PRAGMA foreign_key_list(receipt_sources)`).all<{
+      table: string;
+      from: string;
+      to: string;
+    }>();
+    expect(receiptSourcesFks.results).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ table: "receipts", from: "receipt_id", to: "id" }),
+      ]),
+    );
+
+    // And the rebuilt table's FK enforcement is live, not just declared —
+    // a receipt referenced by an existing line_items row still can't be
+    // deleted (RESTRICT), proving the child's FK resolves to a real,
+    // enforced parent after the rebuild.
+    const receiptId = crypto.randomUUID();
+    await DB.prepare(
+      `INSERT INTO receipts (id, merchant_raw, status) VALUES (?, 'FK CHECK MART', 'extracted')`,
+    )
+      .bind(receiptId)
+      .run();
+    await DB.prepare(
+      `INSERT INTO line_items (id, receipt_id, raw_text, taxonomy_version) VALUES (?, ?, 'FK CHECK ITEM', '0.1.0')`,
+    )
+      .bind(crypto.randomUUID(), receiptId)
+      .run();
+    await expect(
+      DB.prepare(`DELETE FROM receipts WHERE id = ?`).bind(receiptId).run(),
+    ).rejects.toThrow();
+  });
+});
