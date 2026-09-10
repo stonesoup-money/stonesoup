@@ -3,6 +3,9 @@ import {
   BACKFILL_WINDOW_DAYS,
   DEFAULT_LEGAL_CONTEXT,
   GOLDEN_SET_CONTRIBUTION_DEFAULT,
+  GOLDEN_SET_SUBMISSION_ALLOWLIST,
+  GOLDEN_SET_SUBMISSION_EXCLUDED_COLUMNS,
+  GOLDEN_SET_SUBMISSION_PSEUDONYMIZED_COLUMNS,
   getLegalDocument,
 } from "@stonesoup/core";
 import { describe, expect, it } from "vitest";
@@ -77,6 +80,89 @@ describe("golden_set schema matches the anonymization claims in /data-promise", 
     }>();
     const labeler = results.find((row) => row.name === "labeler");
     expect(labeler?.notnull).toBe(1);
+  });
+});
+
+describe("the golden-set submission payload allowlist is exhaustive (review round 1, finding 3)", () => {
+  // finding 3's whole complaint: the two tests above assert eleven-then-
+  // more columns are *present*, but never that the set the policy
+  // describes as leaving this instance is *closed*. These tests make
+  // that assertion for real, against the live schema, so a column added
+  // to golden_set later without an update to
+  // packages/core/src/legal/submission-fields.ts fails `pnpm check`
+  // instead of silently riding along in — or silently being left out
+  // of — what /data-promise says leaves this instance.
+  it("every golden_set column is categorized as allowlisted, pseudonymized, or excluded — none left uncategorized", async () => {
+    const { results } = await env.DB.prepare("PRAGMA table_info(golden_set)").all<{
+      name: string;
+    }>();
+    const columnNames = results.map((row) => row.name);
+
+    const categorized = new Set([
+      ...GOLDEN_SET_SUBMISSION_ALLOWLIST,
+      ...GOLDEN_SET_SUBMISSION_PSEUDONYMIZED_COLUMNS,
+      ...GOLDEN_SET_SUBMISSION_EXCLUDED_COLUMNS,
+    ]);
+
+    const uncategorized = columnNames.filter((name) => !categorized.has(name));
+    expect(
+      uncategorized,
+      `golden_set column(s) not categorized in packages/core/src/legal/submission-fields.ts: ${uncategorized.join(", ")}. ` +
+        "Add each to exactly one of GOLDEN_SET_SUBMISSION_ALLOWLIST / " +
+        "_PSEUDONYMIZED_COLUMNS / _EXCLUDED_COLUMNS, and update data-promise.ts's prose to match.",
+    ).toEqual([]);
+  });
+
+  it("nothing in the allowlist/pseudonymize/exclude sets names a column that doesn't actually exist", async () => {
+    const { results } = await env.DB.prepare("PRAGMA table_info(golden_set)").all<{
+      name: string;
+    }>();
+    const columnNames = new Set(results.map((row) => row.name));
+
+    for (const name of [
+      ...GOLDEN_SET_SUBMISSION_ALLOWLIST,
+      ...GOLDEN_SET_SUBMISSION_PSEUDONYMIZED_COLUMNS,
+      ...GOLDEN_SET_SUBMISSION_EXCLUDED_COLUMNS,
+    ]) {
+      expect(
+        columnNames.has(name),
+        `submission-fields.ts names "${name}", not a real golden_set column`,
+      ).toBe(true);
+    }
+  });
+
+  it("the three category sets are disjoint — no column is categorized twice", () => {
+    const allowlist = new Set(GOLDEN_SET_SUBMISSION_ALLOWLIST);
+    const pseudonymized = new Set(GOLDEN_SET_SUBMISSION_PSEUDONYMIZED_COLUMNS);
+    const excluded = new Set(GOLDEN_SET_SUBMISSION_EXCLUDED_COLUMNS);
+
+    for (const name of allowlist) {
+      expect(
+        pseudonymized.has(name),
+        `"${name}" is in both the allowlist and the pseudonymized set`,
+      ).toBe(false);
+      expect(excluded.has(name), `"${name}" is in both the allowlist and the excluded set`).toBe(
+        false,
+      );
+    }
+    for (const name of pseudonymized) {
+      expect(excluded.has(name), `"${name}" is in both the pseudonymized and excluded sets`).toBe(
+        false,
+      );
+    }
+  });
+
+  it("labeler is pseudonymized, not allowlisted as-is or silently excluded", () => {
+    expect(GOLDEN_SET_SUBMISSION_ALLOWLIST).not.toContain("labeler");
+    expect(GOLDEN_SET_SUBMISSION_PSEUDONYMIZED_COLUMNS).toContain("labeler");
+  });
+
+  it("id, created_at, and submitted_at are excluded — none leave, not even created_at coarsened", () => {
+    expect(GOLDEN_SET_SUBMISSION_EXCLUDED_COLUMNS).toEqual(
+      expect.arrayContaining(["id", "created_at", "submitted_at"]),
+    );
+    expect(GOLDEN_SET_SUBMISSION_ALLOWLIST).not.toContain("created_at");
+    expect(GOLDEN_SET_SUBMISSION_PSEUDONYMIZED_COLUMNS).not.toContain("created_at");
   });
 });
 

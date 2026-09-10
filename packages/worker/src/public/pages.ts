@@ -1,6 +1,7 @@
 import {
   DEFAULT_LEGAL_CONTEXT,
   type DeploymentMode,
+  hasPlaceholderOperatorIdentity,
   LEGAL_DOCUMENTS,
   type LegalContext,
   PUBLIC_ROUTE_PATHS,
@@ -25,7 +26,10 @@ import { html, raw } from "hono/html";
 
 /** The path list `wrangler.jsonc`'s `run_worker_first` must contain
  * verbatim, re-exported for the verifier script and for tests. */
-export { PUBLIC_ROUTE_PATHS };
+// Exported for a direct unit test (packages/worker/src/public/pages.test.ts)
+// that this actually gets called, rather than only trusting the review
+// finding it fixes never regresses silently (review round 1, finding 4).
+export { PUBLIC_ROUTE_PATHS, warnIfHostedIdentityUnfilled };
 
 const KNOWN_MODES: readonly DeploymentMode[] = ["self-hosted", "hosted"];
 
@@ -51,6 +55,26 @@ function legalContextFromEnv(env: Env): LegalContext {
     operatorName: env.OPERATOR_NAME || DEFAULT_LEGAL_CONTEXT.operatorName,
     operatorContact: env.OPERATOR_CONTACT || DEFAULT_LEGAL_CONTEXT.operatorContact,
   };
+}
+
+/** Logs a visible server-side warning the moment a hosted deployment is
+ * about to serve one of these pages with its operator identity still
+ * unfilled — the placeholder text in the rendered page (see context.ts's
+ * `placeholder()`) is the reader-facing signal, this is the
+ * deployer-facing one, so a hosted instance going live misconfigured is
+ * loud in two places, not one (review round 1, finding 4). Deliberately
+ * side-effecting only (no header, no response change): the page's own
+ * `[[...]]` markers are the correctness guarantee, this is an
+ * operational nudge on top of that guarantee, not a replacement for it. */
+function warnIfHostedIdentityUnfilled(ctx: LegalContext): void {
+  if (ctx.mode === "hosted" && hasPlaceholderOperatorIdentity(ctx)) {
+    console.error(
+      'Stone Soup: DEPLOYMENT_MODE is "hosted" but OPERATOR_NAME and/or ' +
+        "OPERATOR_CONTACT is still unset — the public legal pages are rendering " +
+        "placeholder text. Set both wrangler.jsonc vars before this instance " +
+        "serves a real hosted user.",
+    );
+  }
 }
 
 function pageShell(title: string, bodyHtml: string) {
@@ -82,6 +106,7 @@ export const publicPages = new Hono<{ Bindings: Env }>();
 for (const doc of LEGAL_DOCUMENTS) {
   publicPages.get(doc.path, async (c) => {
     const ctx = legalContextFromEnv(c.env);
+    warnIfHostedIdentityUnfilled(ctx);
     const bodyHtml = renderMarkdown(doc.markdown(ctx));
     const page = await pageShell(doc.title, bodyHtml);
 

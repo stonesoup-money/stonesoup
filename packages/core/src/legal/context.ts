@@ -13,10 +13,19 @@ import {
  * say exactly that instead of asking anyone to fill something in. The
  * hosted fleet is a real operator serving other people's data, and its
  * documents need facts only a human has: legal entity name, contact
- * address, governing jurisdiction, effective date, and the hosted
- * deletion mechanism. Inventing any of these would be fabricating a legal
- * document (STON-13 plan) — so every hosted-mode value below is an
- * unmissable placeholder, never a guess, until a human fills it in.
+ * address, governing jurisdiction, and effective date. Inventing any of
+ * these would be fabricating a legal document (STON-13 plan) — so every
+ * hosted-mode value below is an unmissable placeholder, never a guess,
+ * until a human fills it in.
+ *
+ * There is deliberately no "hosted deletion mechanism" placeholder here.
+ * Account/receipt deletion is not a per-deployment fact a human fills in
+ * the way a jurisdiction is — it is a feature that does not exist in this
+ * codebase at all yet (STON-18: the schema's FK graph is RESTRICT-only,
+ * with no delete path for any table, hosted or self-hosted). A
+ * placeholder here would read as "fill in your mechanism", misrepresenting
+ * an unbuilt feature as a deployment detail; privacy.ts instead states the
+ * "nothing exists yet" fact directly (review round 1, finding 4).
  */
 
 export type DeploymentMode = "self-hosted" | "hosted";
@@ -43,14 +52,12 @@ function placeholder(label: string): string {
 
 // Not wired to a wrangler.jsonc var (only DEPLOYMENT_MODE, OPERATOR_NAME
 // and OPERATOR_CONTACT are — see wrangler.jsonc and config.ts above)
-// because a governing jurisdiction, an effective date, and a deletion
-// mechanism description are one-time legal/product decisions, not
-// per-deployment config a self-hoster would ever set. They stay inline
-// placeholders a human edits directly here when the hosted service is
-// ready to launch.
+// because a governing jurisdiction and an effective date are one-time
+// legal/product decisions, not per-deployment config a self-hoster would
+// ever set. They stay inline placeholders a human edits directly here
+// when the hosted service is ready to launch.
 export const PLACEHOLDER_JURISDICTION = placeholder("GOVERNING_JURISDICTION");
 export const PLACEHOLDER_EFFECTIVE_DATE = placeholder("EFFECTIVE_DATE");
-export const PLACEHOLDER_HOSTED_DELETION_MECHANISM = placeholder("HOSTED_DELETION_MECHANISM");
 
 /**
  * ISO 8601 date this document *text* was last revised. This is not a
@@ -75,7 +82,15 @@ export const DEFAULT_LEGAL_CONTEXT: LegalContext = {
   operatorContact: DEFAULT_OPERATOR_CONTACT,
 };
 
-/** True until a human has replaced the operator placeholders with real values. */
+/**
+ * True until a human has replaced the operator placeholders with real
+ * values. Used by packages/worker/src/public/pages.ts to log a visible
+ * server-side warning when a hosted deployment is about to serve real
+ * users with an unfilled operator identity — a second, operational
+ * signal alongside the `[[...]]` marker already rendered into the page
+ * text itself (review round 1, finding 4: this function existed but was
+ * never called anywhere).
+ */
 export function hasPlaceholderOperatorIdentity(ctx: LegalContext): boolean {
   return (
     ctx.operatorName === DEFAULT_OPERATOR_NAME || ctx.operatorContact === DEFAULT_OPERATOR_CONTACT

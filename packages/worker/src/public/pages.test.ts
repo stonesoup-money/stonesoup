@@ -1,6 +1,11 @@
 import { SELF } from "cloudflare:test";
-import { PUBLIC_ROUTE_PATHS } from "@stonesoup/core";
-import { describe, expect, it } from "vitest";
+import {
+  DEFAULT_OPERATOR_CONTACT,
+  DEFAULT_OPERATOR_NAME,
+  PUBLIC_ROUTE_PATHS,
+} from "@stonesoup/core";
+import { describe, expect, it, vi } from "vitest";
+import { warnIfHostedIdentityUnfilled } from "./pages.js";
 
 /**
  * SELF.fetch drives the real exported Worker handler (packages/worker/src/index.ts),
@@ -92,6 +97,46 @@ describe("public legal pages: content and safety headers", () => {
     const body = await response.text();
     expect(body).toContain('href="/terms"');
     expect(body).toContain('href="/data-promise"');
+  });
+});
+
+describe("warnIfHostedIdentityUnfilled (review round 1, finding 4)", () => {
+  // hasPlaceholderOperatorIdentity() existed in context.ts but was never
+  // called anywhere in the repo before this fix. This proves the call
+  // site pages.ts now has actually fires under the condition it exists
+  // for, instead of just existing unused again under a different name.
+  it("logs a warning when hosted mode still has the default operator identity", () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    warnIfHostedIdentityUnfilled({
+      mode: "hosted",
+      operatorName: DEFAULT_OPERATOR_NAME,
+      operatorContact: DEFAULT_OPERATOR_CONTACT,
+    });
+    expect(errorSpy).toHaveBeenCalledTimes(1);
+    expect(errorSpy.mock.calls[0]?.[0]).toContain("hosted");
+    errorSpy.mockRestore();
+  });
+
+  it("does not warn when hosted mode has a real operator identity", () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    warnIfHostedIdentityUnfilled({
+      mode: "hosted",
+      operatorName: "Stone Soup Hosting, Inc.",
+      operatorContact: "privacy@example.com",
+    });
+    expect(errorSpy).not.toHaveBeenCalled();
+    errorSpy.mockRestore();
+  });
+
+  it("does not warn in self-hosted mode even with the default identity fields", () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    warnIfHostedIdentityUnfilled({
+      mode: "self-hosted",
+      operatorName: "irrelevant in self-hosted mode",
+      operatorContact: "irrelevant in self-hosted mode",
+    });
+    expect(errorSpy).not.toHaveBeenCalled();
+    errorSpy.mockRestore();
   });
 });
 

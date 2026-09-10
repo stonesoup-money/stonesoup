@@ -91,4 +91,26 @@ describe("renderMarkdown: supported subset", () => {
   it("renders an empty string as empty output", () => {
     expect(renderMarkdown("")).toBe("");
   });
+
+  it("renders `code` as <code> (review round 1, finding 7)", () => {
+    const html = renderMarkdown('Set `GOLDEN_SET_CONTRIBUTION` to `"off"`.');
+    expect(html).toBe(
+      "<p>Set <code>GOLDEN_SET_CONTRIBUTION</code> to <code>&quot;off&quot;</code>.</p>",
+    );
+  });
+
+  it("does not reinterpret ** or [text](url) inside a code span", () => {
+    const html = renderMarkdown("`a**b**c` and `[x](y)`");
+    expect(html).toBe("<p><code>a**b**c</code> and <code>[x](y)</code></p>");
+  });
+
+  it("renders a standalone --- line as <hr> (review round 1, finding 7)", () => {
+    const html = renderMarkdown("Paragraph one.\n\n---\n\nParagraph two.");
+    expect(html).toBe("<p>Paragraph one.</p>\n<hr>\n<p>Paragraph two.</p>");
+  });
+
+  it("does not treat a - list item as a thematic break", () => {
+    const html = renderMarkdown("- first\n- second");
+    expect(html).toBe("<ul><li>first</li><li>second</li></ul>");
+  });
 });

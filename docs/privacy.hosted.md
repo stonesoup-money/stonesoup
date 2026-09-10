@@ -1,6 +1,6 @@
 # Privacy Policy
 
-This is a self-hosted instance of Stone Soup. There is no separate operator: whoever deployed this instance controls it, and your data goes to their Cloudflare account, not to Stone Soup the project or its maintainers. This document describes what the software does with your data on **any** instance; the "who to contact" details below are the deployer's, not ours.
+This policy covers the hosted Stone Soup service operated by [[LEGAL_ENTITY — a human must fill this in before this instance serves a hosted user — see docs/privacy-claims.md]] (contact: [[CONTACT_ADDRESS — a human must fill this in before this instance serves a hosted user — see docs/privacy-claims.md]]) at the domain where you are reading this. If you instead run your own copy of Stone Soup's open-source code on your own Cloudflare account, this policy does not apply to your deployment — see "If you self-host" below.
 
 ## What this app does
 
@@ -12,7 +12,7 @@ Stone Soup ingests your receipts — from photo upload and, once you connect it,
 - **Receipt and line-item records** — merchant, date, amounts, and the individual line items extracted from each receipt — in this instance's D1 (SQLite) database. Money is stored as whole cents, never as a rounded or reformatted figure.
 - **Your Gmail connection**, if you connect one: a sync checkpoint (a Gmail history ID) and connection status, scoped to your account, stored in this instance's database. OAuth tokens themselves — the credential that actually lets this instance read matching mail — are part of the same committed design but are not yet wired to a storage column in this schema *(design — not yet built; see docs/privacy-claims.md)*. Once implemented, they will be revocable at any time from your Google Account settings or by disconnecting inside the app.
 - **A session cookie** that keeps you signed in to this instance. See "Cookies" below.
-- **Your Anthropic API key**, if you provide one for receipt extraction, stored as a Cloudflare Workers Secret — a mechanism separate from this instance's database, never written to D1, never logged, and never sent anywhere except to Anthropic's API to run your own extraction requests.
+- **Compute is not billed to you and this instance does not ask you for a personal Anthropic key.** Receipt extraction runs on [[LEGAL_ENTITY — a human must fill this in before this instance serves a hosted user — see docs/privacy-claims.md]]'s own Anthropic API key, with your usage tracked against a monthly per-account extraction budget (see [/terms](/terms)). Your receipt images and extracted text are sent to Anthropic under [[LEGAL_ENTITY — a human must fill this in before this instance serves a hosted user — see docs/privacy-claims.md]]'s account to run that call — not under an account of your own.
 
 None of the above leaves this instance except as described in "What leaves this instance" below.
 
@@ -32,7 +32,7 @@ This app's use and transfer of information received from Google APIs adheres to 
 
 This instance sends data to a fixed, small set of outside services, and no others:
 
-- **Anthropic** — receipt images and extracted text, to run the vision extraction call that reads your receipts. Governed by whichever API key is configured for this instance (your own, in a self-hosted or BYOK deployment).
+- **Anthropic** — receipt images and extracted text, to run the vision extraction call that reads your receipts. Governed by [[LEGAL_ENTITY — a human must fill this in before this instance serves a hosted user — see docs/privacy-claims.md]]'s own Anthropic API key, tracked per account against a monthly budget (see "What is stored in this instance" above and [/terms](/terms)).
 - **Cloudflare** — this instance's own hosting, database (D1), file storage (R2), and background job queue. Cloudflare is the infrastructure this app runs on, not a separate data recipient.
 - **Google** — solely for Gmail sync, if you connect it, per the section above.
 - **Stone Soup's central submission service** — a golden-set label (see "What leaves this instance" below), if golden-set contribution is enabled. Unlike the three services above, this is not infrastructure you or this instance's operator control: it is infrastructure operated by the Stone Soup project itself, and for a self-hosted deployment it is the one recipient in this whole document that is not your own account. **This submission client does not exist in this codebase yet** *(design — not yet built; see docs/privacy-claims.md)* — until it is built, nothing reaches this recipient by any path.
@@ -55,7 +55,7 @@ A golden-set label already contributed under "What leaves this instance" above c
 
 ## No operator access
 
-There is no admin view or support screen, anywhere in this application, through which an operator — including a self-hosting deployer — can browse another user's receipts, line items, or images. Each deployment is single-tenant: your data lives in your own database and storage, structurally separate from every other user's, not merely access-controlled.
+There is no admin view or support screen, anywhere in this application, through which an operator — including [[LEGAL_ENTITY — a human must fill this in before this instance serves a hosted user — see docs/privacy-claims.md]] — can browse another user's receipts, line items, or images. Each deployment is single-tenant: your data lives in your own database and storage, structurally separate from every other user's, not merely access-controlled.
 
 ## Security
 
@@ -65,8 +65,12 @@ Data in transit to and from this instance is encrypted (HTTPS). Data at rest sit
 
 This instance sets one cookie: a signed session token that keeps you signed in. There is no tracking cookie, no third-party cookie, and no advertising cookie.
 
-**Contact and governing law.** A self-hosted instance has no separate legal entity and no jurisdiction of its own — you are the operator, running the code on infrastructure you control. If you offer this instance to other people, you should add your own contact details and, if relevant to you, a governing jurisdiction, here. This document was last revised on 2026-09-10.
+**Contact.** Questions about this policy, or to exercise a data-protection right, contact [[LEGAL_ENTITY — a human must fill this in before this instance serves a hosted user — see docs/privacy-claims.md]] at [[CONTACT_ADDRESS — a human must fill this in before this instance serves a hosted user — see docs/privacy-claims.md]].
 
-## If you offer this instance to other people
+**Governing law.** This policy is governed by the laws of [[GOVERNING_JURISDICTION — a human must fill this in before this instance serves a hosted user — see docs/privacy-claims.md]].
 
-This document currently renders as a self-hosted policy: no separate legal entity, no jurisdiction, because none exists by default. If you are deploying this instance for people other than yourself, set the `DEPLOYMENT_MODE`, `OPERATOR_NAME`, and `OPERATOR_CONTACT` Worker variables in your `wrangler.jsonc` to describe your own operating entity, and review the hosted-mode placeholders in `docs/privacy-claims.md` before you do — they exist so an incomplete hosted policy is visibly incomplete, not plausible-looking.
+**Effective date.** This policy takes effect on [[EFFECTIVE_DATE — a human must fill this in before this instance serves a hosted user — see docs/privacy-claims.md]]. It was last revised on 2026-09-10.
+
+## If you self-host instead
+
+Stone Soup is AGPL-3.0 open-source software. If you deploy your own copy to your own Cloudflare account instead of using this hosted service, you are the operator of that instance: your data goes to your D1 database, your R2 bucket, and your Gmail OAuth app, under your own Google Cloud project. This policy does not apply to your deployment — the same document, rendered by your instance with `DEPLOYMENT_MODE` left at its default `"self-hosted"`, applies instead and says so plainly.

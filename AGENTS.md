@@ -177,11 +177,18 @@ here gets its why.
   the `golden_set` row to begin with. *Identity* (`labeler`) is the
   opposite: it **is written and kept locally on purpose**, a real
   internal identifier used for quality control, and is pseudonymized
-  only at **export**. `labeler` looks like a user id, which makes
-  nulling it at write time feel like it satisfies the context rule
-  above — it doesn't; that rule is about context, not about
-  `labeler`, and nulling `labeler` early is a bug, not a fix
-  (STON-16).
+  at the **instance boundary, at submission** — not at dataset
+  export (resolved 2026-09-10, decisions.md, "when is `labeler`
+  pseudonymized?": the raw value must never sit in the central
+  submission pot at all, which "pseudonymized at export" would have
+  allowed). `labeler` looks like a user id, which makes nulling it at
+  write time feel like it satisfies the context rule above — it
+  doesn't; that rule is about context, not about `labeler`, and
+  nulling `labeler` early is a bug, not a fix (STON-16). The same
+  resolution excludes `golden_set.created_at` from the submission
+  payload too (or coarsens it to a date) — a per-label timestamp next
+  to a per-labeler pseudonym is a re-identification handle in a
+  CC0-published dataset.
 - `split` is assigned once and never changed. The held-out test set is
   never used for prompt tuning.
 - The client-side filter runs **before** submission — pharmacy-pattern
@@ -443,7 +450,9 @@ wins.
    boundary, the `golden_set` and two-boundaries bullets. Trigger: a
    golden-set write or submission carrying context (image reference,
    receipt id, user id, store, purchase timestamp); also stripping or
-   nulling `labeler` at write time instead of export.
+   nulling `labeler` at write time instead of at the instance boundary
+   (submission); also a submission payload that includes the real
+   `labeler` or an uncoarsened `created_at`.
 4. **Sensitive strings never leave the machine** — Privacy and the
    anonymization boundary, the client-side filter bullet. Trigger: a
    submission path that bypasses the filter, or a filter change that

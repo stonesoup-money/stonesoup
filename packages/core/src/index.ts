@@ -4,4 +4,5 @@ export * from "./dedupe.js";
 export * from "./legal/context.js";
 export * from "./legal/documents.js";
 export * from "./legal/markdown.js";
+export * from "./legal/submission-fields.js";
 export * from "./money.js";
