@@ -8,6 +8,8 @@ coverage/
 .dev.vars.*
 .env
 .env.*
+!.dev.vars.example
+!.env.example
 
 *.log
 .DS_Store
