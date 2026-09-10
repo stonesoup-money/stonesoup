@@ -12,8 +12,17 @@ import { describe, expect, it } from "vitest";
  *
  * The assertion below is real, not a no-op: it checks this file executed
  * under happy-dom (the `web` project's environment) — if it were
- * collected by the wrong project, or not collected at all, this would
- * fail or simply vanish rather than pass.
+ * collected by the wrong project, it would fail rather than pass.
+ *
+ * It cannot, however, detect its own *absence* (review round 2,
+ * finding 10): if `include` regressed back to `.test.tsx`-only, this file
+ * would simply stop being collected, and `vitest run` stays green as long
+ * as one file anywhere still matches — the exact failure mode this file's
+ * docstring used to claim it prevented. `scripts/verify-web-tests-collected.mjs`,
+ * wired into `pnpm check`, is the actual backstop: it counts
+ * `packages/web/**\/*.test.{ts,tsx}` on disk independently of vitest's
+ * `include` and fails if the two diverge, so a regressed `include` fails
+ * loudly instead of quietly dropping this file.
  */
 describe("the web Vitest project collects plain .test.ts files", () => {
   it("runs under the happy-dom environment", () => {

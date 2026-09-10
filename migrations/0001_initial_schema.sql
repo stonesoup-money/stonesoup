@@ -14,23 +14,42 @@
 --      exception with a second accepted shape — see its column comment.
 --   3. Raw receipt text is never overwritten — `line_items.raw_text` and
 --      `receipts.merchant_raw` are NOT NULL, and a BEFORE UPDATE trigger
---      RAISE(ABORT)s any attempt to change them. `INSERT OR REPLACE`
---      bypasses BEFORE UPDATE triggers entirely (REPLACE is DELETE+INSERT,
---      not UPDATE) and would otherwise delete-and-silently-recreate these
---      rows — see the recursive_triggers pragma and the three
---      `*_no_replace` triggers below, which are what actually close that
---      hole.
+--      RAISE(ABORT)s any attempt to change them.
 --
--- `PRAGMA recursive_triggers = ON` is required for a BEFORE DELETE trigger
--- to fire for the DELETE half of `INSERT OR REPLACE`'s conflict
--- resolution — off (SQLite's default, and what a fresh D1 connection
--- starts with), that DELETE is invisible to triggers and REPLACE silently
--- destroys the row. This must be re-issued on every connection (it is a
--- connection pragma, not stored in the database file), so every code path
--- that opens a raw connection to this database — the migration runner
--- included — must set it before running anything that depends on the
--- guard triggers below.
-PRAGMA recursive_triggers = ON;
+-- **`INSERT OR REPLACE` / `REPLACE INTO` is banned outright (AGENTS.md),
+-- not merely guarded — review round 2, finding 1.** An earlier version of
+-- this migration tried to close the REPLACE hole with
+-- `PRAGMA recursive_triggers = ON` plus three unconditional `BEFORE DELETE`
+-- guard triggers (`receipts_no_replace`, `line_items_no_replace`,
+-- `golden_set_no_replace`). That pragma lives in the sqlite3 **connection**
+-- struct, not the database file, so it is never persisted: every fresh
+-- connection to a real D1 database — i.e. every Worker request in
+-- production — starts with it OFF (D1's default), and the guard triggers
+-- silently never fired. Verified against a real local D1 connection,
+-- separate from the process that ran the migration: `PRAGMA
+-- recursive_triggers` read back `0` after `wrangler d1 migrations apply`,
+-- and `INSERT OR REPLACE INTO line_items` rewrote `raw_text` with no error.
+-- The three guard triggers only appeared to work because the Vitest
+-- harness's migration runner and the test suite shared one Miniflare
+-- connection — an artifact of the test setup that does not exist in
+-- production. There is also no SQL-level way to tell "DELETE caused by
+-- REPLACE's conflict resolution" apart from an ordinary DELETE from inside
+-- a trigger, so no trigger-based fix is possible here. The real defense is
+-- two-layered instead:
+--   a. `ON DELETE RESTRICT` (not CASCADE) on every FK a REPLACE-induced
+--      delete would otherwise cascade through — pragma-independent
+--      (verified: a cascade still ran with `recursive_triggers` off), so
+--      it fires in production exactly as it does in tests. It turns
+--      `INSERT OR REPLACE INTO receipts` (or `sources`) into a loud FK
+--      failure whenever the row has anything to lose, and leaves an
+--      explicit path for a real delete feature later.
+--   b. `INSERT OR REPLACE` / `REPLACE INTO` is banned in application code
+--      by AGENTS.md and caught at author time by a grep gate in
+--      `pnpm check` (`scripts/verify-no-replace.mjs`) — the one thing that
+--      actually stops it on `line_items` and `golden_set`, which have no
+--      FK to restrict against.
+-- See `packages/worker/src/schema.test.ts` for the reproduction against a
+-- real D1 binding.
 
 -- ---------------------------------------------------------------------
 -- sources — one row per ingestion source (a connected Gmail account, or
@@ -67,9 +86,16 @@ CREATE TABLE receipts (
   -- that was never on the receipt (STON-16 / review round 1, finding 4).
   -- "This Month" and every other date-bucketed read buckets on this
   -- printed value, not on a derived instant.
+  -- The date-only shape uses `[0-9]` digit classes, not `?` wildcards
+  -- (review round 2, finding 8): `?` matches any character, so
+  -- `????-??-??` accepted non-digit garbage like `'abcd-ef-gh'`. The
+  -- full-timestamp shape below is already pinned down by its literal `T`
+  -- and `:`/`Z` characters (round 1, finding 15's repro), so it does not
+  -- need the same tightening.
   purchased_at             TEXT CHECK (
                               purchased_at IS NULL
-                              OR purchased_at GLOB '????-??-??'
+                              OR purchased_at GLOB
+                                 '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]'
                               OR purchased_at GLOB '????-??-??T??:??:??*Z'
                             ),
   subtotal_cents           INTEGER CHECK (subtotal_cents IS NULL OR typeof(subtotal_cents) = 'integer'),
@@ -91,13 +117,13 @@ CREATE TABLE receipts (
   created_at                TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
                                CHECK (created_at GLOB '????-??-??T??:??:??*Z'),
   -- Caller-maintained, not automatic: no trigger bumps this on UPDATE.
-  -- (An AFTER UPDATE trigger that re-UPDATEs the same row it fired on is
-  -- the usual idiom, but with `recursive_triggers` ON above — required for
-  -- the REPLACE guard below — it recurses: the strftime() call inside the
-  -- trigger can return the same millisecond it's replacing, the WHEN
-  -- guard re-passes, and it loops until SQLite's trigger-depth limit
-  -- aborts the statement. Verified empirically; not a hypothetical.) Every
-  -- writer that changes a row on this table must set `updated_at` itself.
+  -- Simpler and more explicit than an AFTER UPDATE trigger that re-UPDATEs
+  -- the row it fired on — every writer that changes a row on this table
+  -- must set `updated_at` itself. (An earlier version of this comment
+  -- justified this via a `recursive_triggers = ON` pragma this migration
+  -- no longer sets — see the migration header, review round 2, finding 1
+  -- — so that reasoning no longer applies; the caller-maintained design
+  -- stands on its own regardless.)
   updated_at                TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
                                CHECK (updated_at GLOB '????-??-??T??:??:??*Z')
 );
@@ -112,28 +138,16 @@ BEGIN
 END;
 
 -- `INSERT OR REPLACE` is DELETE+INSERT, not UPDATE — the trigger above
--- never sees it, and an ordinary-looking "upsert" of a receipt silently
--- deletes every line_items/receipt_sources row for it (FK ON DELETE
--- CASCADE) and recreates the receipt with none of them (review round 1,
--- finding 1). This trigger closes that: with `recursive_triggers` ON, a
--- BEFORE DELETE trigger fires for REPLACE's conflict-resolution delete
--- exactly as it would for a direct DELETE, and RAISE(ABORT) rolls back
--- the whole statement — proven against the real reproduction in
--- schema.test.ts. Deliberately unconditional: there is no SQL-level way
--- to tell "delete caused by REPLACE" apart from "delete the application
--- issued on purpose" from inside a trigger, and this table has no
--- legitimate direct-delete path in v1 anyway (no UI or pipeline code
--- deletes a receipt; STON-11's dedupe merge updates and re-points
--- `receipt_sources` rows, it does not delete a `receipts` row). A future
--- ticket that needs to remove a receipt for real needs a soft-delete
--- column, not a rollback of this trigger — and should treat rolling it
--- back as a deliberate, reviewed decision, not a side effect of "the
--- upsert didn't work."
-CREATE TRIGGER receipts_no_replace
-BEFORE DELETE ON receipts
-BEGIN
-  SELECT RAISE(ABORT, 'receipts rows cannot be deleted or REPLACEd — this table has no delete path in v1; see the trigger comment in the migration');
-END;
+-- never sees it. Review round 1, finding 1 proved that an ordinary-looking
+-- "upsert" of a receipt silently deletes every line_items/receipt_sources
+-- row for it and recreates the receipt with none of them; round 1's fix
+-- (a `recursive_triggers`-gated BEFORE DELETE trigger here) turned out to
+-- be inert in production (review round 2, finding 1 — see the migration
+-- header). The real defense now is `line_items.receipt_id` and
+-- `receipt_sources.receipt_id` both being `ON DELETE RESTRICT` below: a
+-- REPLACE-induced delete of a `receipts` row with any children fails the
+-- FK check loudly instead of cascading them away silently, and the
+-- pnpm check grep gate stops the statement from being written at all.
 
 -- ---------------------------------------------------------------------
 -- receipt_sources — join table linking a receipt to every source it was
@@ -143,11 +157,23 @@ END;
 -- both hold. This join table is the accepted resolution (STON-16):
 -- `receipts` carries no `source_id`. `external_id` is the Gmail message ID
 -- (or equivalent) and its UNIQUE index is re-sync idempotency for free.
+--
+-- Both FKs are `ON DELETE RESTRICT`, not CASCADE (review round 2, finding
+-- 3): `sources` has no guard against `INSERT OR REPLACE`, and unlike
+-- `receipts`/`line_items`/`golden_set` no trigger-based approach was ever
+-- attempted for it either, because FK cascade actions are not gated by
+-- `recursive_triggers` at all — verified: a REPLACE-induced cascade still
+-- ran with the pragma off. `INSERT OR REPLACE INTO sources` used to
+-- silently delete every idempotency record for that source; Gmail
+-- reconnect (STON-4/STON-6) is exactly the code path most likely to write
+-- that statement. RESTRICT makes it fail loudly instead. A source
+-- disconnect is `UPDATE sources SET auth_state = 'disconnected'`, which is
+-- what that enum value exists for — not a delete.
 -- ---------------------------------------------------------------------
 CREATE TABLE receipt_sources (
   id           TEXT PRIMARY KEY,
-  receipt_id   TEXT NOT NULL REFERENCES receipts(id) ON DELETE CASCADE,
-  source_id    TEXT NOT NULL REFERENCES sources(id) ON DELETE CASCADE,
+  receipt_id   TEXT NOT NULL REFERENCES receipts(id) ON DELETE RESTRICT,
+  source_id    TEXT NOT NULL REFERENCES sources(id) ON DELETE RESTRICT,
   external_id  TEXT,
   ingested_at  TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
                  CHECK (ingested_at GLOB '????-??-??T??:??:??*Z')
@@ -159,10 +185,15 @@ CREATE TABLE receipt_sources (
 -- The embedding block ships nullable and unpopulated: novelty routing
 -- (lever 3) is phase 2, so enabling it later is a backfill, not a
 -- migration (AGENTS.md, Data conventions #7).
+--
+-- `receipt_id` is `ON DELETE RESTRICT`, not CASCADE (review round 2,
+-- finding 3) — see the migration header and the receipt_sources comment
+-- above for why RESTRICT, not a trigger, is the defense that actually
+-- fires in production.
 -- ---------------------------------------------------------------------
 CREATE TABLE line_items (
   id                     TEXT PRIMARY KEY,
-  receipt_id             TEXT NOT NULL REFERENCES receipts(id) ON DELETE CASCADE,
+  receipt_id             TEXT NOT NULL REFERENCES receipts(id) ON DELETE RESTRICT,
   line_number             INTEGER,
   raw_text                TEXT NOT NULL,
   normalized_name          TEXT,
@@ -202,17 +233,6 @@ BEFORE UPDATE OF raw_text ON line_items
 WHEN NEW.raw_text IS NOT OLD.raw_text
 BEGIN
   SELECT RAISE(ABORT, 'line_items.raw_text is immutable: raw receipt text is never overwritten');
-END;
-
--- Same REPLACE hole as receipts, same fix, same reasoning — see
--- `receipts_no_replace` above. A line_items row's only legitimate removal
--- path in v1 is a cascade from its parent receipt, and receipts rows are
--- themselves undeletable (see above), so this table has no live
--- direct-delete path either.
-CREATE TRIGGER line_items_no_replace
-BEFORE DELETE ON line_items
-BEGIN
-  SELECT RAISE(ABORT, 'line_items rows cannot be deleted or REPLACEd — see the trigger comment in the migration');
 END;
 
 -- ---------------------------------------------------------------------
@@ -285,15 +305,16 @@ BEGIN
   SELECT RAISE(ABORT, 'golden_set.split is write-once: it is assigned once and never changed');
 END;
 
--- Same REPLACE hole as receipts/line_items, same fix. This is the
--- table least tolerant of it: a REPLACE-induced delete-then-reinsert
--- would silently reassign a written `split`, bypassing the write-once
--- trigger above the same way REPLACE bypasses the raw-text triggers.
-CREATE TRIGGER golden_set_no_replace
-BEFORE DELETE ON golden_set
-BEGIN
-  SELECT RAISE(ABORT, 'golden_set rows cannot be deleted or REPLACEd — see the trigger comment in the migration');
-END;
+-- `golden_set` has no FK to any other table by design (the anonymization
+-- boundary above) — there is nothing here for `ON DELETE RESTRICT` to
+-- attach to, and no trigger can distinguish REPLACE's delete from a real
+-- one (see migration header). A REPLACE-induced delete-then-reinsert would
+-- silently reassign a written `split`, bypassing the write-once trigger
+-- above the same way REPLACE bypasses the raw-text triggers elsewhere —
+-- this table depends entirely on the `INSERT OR REPLACE` ban being
+-- enforced at author time (AGENTS.md; `pnpm check`'s grep gate) rather
+-- than at the database layer, and review round 2, finding 1 is explicit
+-- that no SQL construct on D1 changes that.
 
 -- ---------------------------------------------------------------------
 -- Indexes
@@ -332,9 +353,10 @@ CREATE UNIQUE INDEX idx_receipt_sources_external_id
   ON receipt_sources (external_id)
   WHERE external_id IS NOT NULL;
 
--- FK child indexes for receipt_sources — every ON DELETE CASCADE onto
--- this table (from receipts and from sources) was a full scan without
--- these (review round 1, finding 9).
+-- FK child indexes for receipt_sources — every FK action onto this table
+-- (from receipts and from sources; RESTRICT as of review round 2, finding
+-- 3 — see the table comment above) was a full scan without these (review
+-- round 1, finding 9).
 CREATE INDEX idx_receipt_sources_receipt_id ON receipt_sources (receipt_id);
 CREATE INDEX idx_receipt_sources_source_id ON receipt_sources (source_id);
 

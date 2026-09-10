@@ -29,3 +29,27 @@ export function assertIsoDateTime(value: unknown, label = "value"): string {
   }
   return value;
 }
+
+/**
+ * `receipts.purchased_at` accepts two shapes, not one (review round 1,
+ * finding 4; migrations/0001_initial_schema.sql's column comment): a full
+ * ISO 8601 datetime, or a date-only `YYYY-MM-DD` when a receipt (a photo,
+ * or an order-confirmation email) prints only a local date and no time or
+ * timezone. `assertIsoDateTime` rejects that second shape outright — using
+ * it at the `purchased_at` write path throws on every photo receipt that
+ * carries only a printed date (review round 2, finding 5). Use
+ * `isPurchaseDate` / `assertPurchaseDate` for `purchased_at` specifically;
+ * every other timestamp column stays on `isIsoDateTime` / `assertIsoDateTime`.
+ */
+export function isPurchaseDate(value: unknown): value is string {
+  return isIsoDateTime(value) || isIsoDate(value);
+}
+
+export function assertPurchaseDate(value: unknown, label = "purchased_at"): string {
+  if (!isPurchaseDate(value)) {
+    throw new TypeError(
+      `${label} must be an ISO 8601 datetime or a date-only YYYY-MM-DD string, got ${String(value)}`,
+    );
+  }
+  return value;
+}

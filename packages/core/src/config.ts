@@ -46,3 +46,8 @@ export const DAILY_REVIEW_CAP_DEFAULT = 200;
  * the cap on every dequeue, a different UX and a different D1 write pattern. */
 export const REVIEW_QUEUE_CAP = 100;
 export const REVIEW_QUEUE_REFILL_AT = 20;
+
+/** Golden-set contribution default (brief, "Golden-set contribution
+ * defaults"): hosted free tier ships this "on" and required by ToS;
+ * self-host ships "on" too, clearly disclosed, opt-out honest. "on" | "off". */
+export const GOLDEN_SET_CONTRIBUTION_DEFAULT = "on";

@@ -38,9 +38,47 @@ const PAIRS = [
   ["DAILY_REVIEW_CAP", "DAILY_REVIEW_CAP_DEFAULT"],
   ["REVIEW_QUEUE_CAP", "REVIEW_QUEUE_CAP"],
   ["REVIEW_QUEUE_REFILL_AT", "REVIEW_QUEUE_REFILL_AT"],
+  ["GOLDEN_SET_CONTRIBUTION", "GOLDEN_SET_CONTRIBUTION_DEFAULT"],
 ];
 
+// config.ts exports that are deliberately *not* a wrangler.jsonc var — pure
+// constants with no env-tunable lever (AGENTS.md: "config values, not
+// hardcodes" means a single named export, not that every export must be an
+// env var). Anything exported from config.ts that is neither here nor in
+// PAIRS is an unpaired export this script cannot see, which is exactly
+// review round 2, finding 6's complaint — so it fails instead of passing
+// silently.
+const CORE_ONLY_EXPORTS = new Set(["CHECKSUM_TOLERANCE_MIN_CENTS", "CHECKSUM_TOLERANCE_PERCENT"]);
+
 let failed = false;
+
+// Every wrangler.jsonc var must be paired. Review round 2, finding 6:
+// wrangler.jsonc shipped GOLDEN_SET_CONTRIBUTION with no config.ts export
+// and no entry in PAIRS, and this script had no way to notice — a
+// hand-maintained PAIRS list is invisible to a var added on only one side.
+for (const wranglerName of Object.keys(wranglerVars)) {
+  if (!PAIRS.some(([w]) => w === wranglerName)) {
+    console.error(
+      `wrangler.jsonc vars.${wranglerName} has no packages/core/src/config.ts pair — add one and ` +
+        "a matching entry to PAIRS in scripts/verify-config-single-source.mjs (review round 2, finding 6).",
+    );
+    failed = true;
+  }
+}
+
+// Every config.ts export that looks like a tunable must be accounted for
+// too — either paired or explicitly listed as intentionally unpaired.
+const exportNames = [...configSrc.matchAll(/export const ([A-Z][A-Z0-9_]*)\s*=/g)].map((m) => m[1]);
+for (const name of exportNames) {
+  if (PAIRS.some(([, c]) => c === name) || CORE_ONLY_EXPORTS.has(name)) continue;
+  console.error(
+    `packages/core/src/config.ts exports ${name} but it is neither paired with a wrangler.jsonc ` +
+      "var (PAIRS) nor listed in CORE_ONLY_EXPORTS as intentionally unpaired, in " +
+      "scripts/verify-config-single-source.mjs (review round 2, finding 6).",
+  );
+  failed = true;
+}
+
 for (const [wranglerName, coreName] of PAIRS) {
   const wranglerValue = wranglerVars[wranglerName];
   if (wranglerValue === undefined) {

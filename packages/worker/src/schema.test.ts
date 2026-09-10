@@ -78,13 +78,33 @@ describe("raw text is never overwritten", () => {
 // Review round 1, finding 1: `INSERT OR REPLACE` is DELETE+INSERT, not
 // UPDATE — the BEFORE UPDATE triggers above never see it, and the reviewer
 // proved it silently deletes every line_items/receipt_sources row for a
-// receipt. These reproduce the exact repro from the review and lock in
-// that `UPDATE OR IGNORE` and upsert `DO UPDATE` still behave correctly.
-describe("INSERT OR REPLACE cannot bypass the protected tables (review round 1, finding 1)", () => {
-  it("blocks the reviewer's exact repro and leaves the receipt's line items intact", async () => {
+// receipt. Round 1's fix (`PRAGMA recursive_triggers = ON` plus three
+// unconditional `BEFORE DELETE` guard triggers) turned out to be inert in
+// production — review round 2, finding 1 proved `recursive_triggers` is a
+// connection pragma that is never persisted to the database file, so a
+// fresh D1 connection (every real Worker request) always starts with it
+// OFF, and the guard triggers silently never fired. The three tests that
+// used to live here passed only because the Vitest harness's migration
+// runner and the test suite shared one Miniflare connection — a harness
+// artifact, not something that exists in production.
+//
+// The replacement mechanism is `ON DELETE RESTRICT` on every FK a
+// REPLACE-induced delete would otherwise cascade through (migration
+// header; `receipts`/`sources`, below) plus an author-time grep gate for
+// the two tables no FK protects (`line_items`, `golden_set`; next describe
+// block). Both halves are proven here against a *real* D1 binding with no
+// dependency on the migration runner's connection: FK enforcement is a
+// property of every D1 connection, not a pragma any particular code path
+// has to re-issue, which is exactly what made `sources` fail the same way
+// under a bare cascade even with `recursive_triggers` off (round 2,
+// finding 3) — the same mechanism protects REPLACE here.
+describe("INSERT OR REPLACE is stopped by ON DELETE RESTRICT where a row has children (review round 2, findings 1 and 3)", () => {
+  it("blocks the reviewer's exact repro on receipts and leaves the receipt's line items intact", async () => {
     // Reviewer's reproduction, verbatim: before, 1 line item; naively,
-    // after, 0 — because REPLACE deletes the receipt row (cascading to
-    // line_items via ON DELETE CASCADE) and reinserts it from scratch.
+    // after, 0 — REPLACE's conflict-resolution DELETE of the old receipts
+    // row now fails outright, because line_items.receipt_id is
+    // ON DELETE RESTRICT and a line item still references it. The whole
+    // statement rolls back.
     await expect(
       DB.prepare(
         `INSERT OR REPLACE INTO receipts (id, merchant_raw, total_cents) VALUES (?, 'TRADER JOES', 9999)`,
@@ -105,22 +125,81 @@ describe("INSERT OR REPLACE cannot bypass the protected tables (review round 1, 
     expect(receipt?.total_cents).toBe(1234);
   });
 
-  it("blocks INSERT OR REPLACE on line_items and leaves raw_text intact", async () => {
+  it("blocks INSERT OR REPLACE on sources when a receipt_sources row still references it (review round 2, finding 3's exact reproduction)", async () => {
+    const receiptSourceId = crypto.randomUUID();
+    await DB.prepare(
+      `INSERT INTO receipt_sources (id, receipt_id, source_id, external_id) VALUES (?, ?, ?, ?)`,
+    )
+      .bind(receiptSourceId, receiptId, sourceId, "gmail-msg-replace-guard")
+      .run();
+
+    // The reviewer's repro against the old schema: this succeeded and took
+    // that source's receipt_sources rows from 1 to 0. receipt_sources.source_id
+    // is now ON DELETE RESTRICT, so the statement must fail instead.
+    await expect(
+      DB.prepare(
+        `INSERT OR REPLACE INTO sources (id, type, auth_state) VALUES (?, 'gmail', 'connected')`,
+      )
+        .bind(sourceId)
+        .run(),
+    ).rejects.toThrow();
+
+    const row = await DB.prepare(`SELECT id FROM receipt_sources WHERE id = ?`)
+      .bind(receiptSourceId)
+      .first();
+    expect(row).not.toBeNull();
+  });
+
+  it("still allows INSERT OR REPLACE on a source with no receipt_sources referencing it (lock-in, not a regression target)", async () => {
+    // RESTRICT is not a blanket ban on REPLACE — it only blocks it when
+    // there is something to lose, which is the whole point (migration
+    // header: "leaves an explicit ordered path for a real ... feature
+    // later").
+    await expect(
+      DB.prepare(
+        `INSERT OR REPLACE INTO sources (id, type, auth_state) VALUES (?, 'gmail', 'connected')`,
+      )
+        .bind(sourceId)
+        .run(),
+    ).resolves.toBeDefined();
+
+    const row = await DB.prepare(`SELECT auth_state FROM sources WHERE id = ?`)
+      .bind(sourceId)
+      .first<{ auth_state: string }>();
+    expect(row?.auth_state).toBe("connected");
+  });
+});
+
+// review round 2, finding 1: no FK and no trigger can protect line_items or
+// golden_set from a REPLACE targeting their own primary key directly — a
+// REPLACE-induced delete of one of their own rows is not a parent-row
+// cascade, so ON DELETE RESTRICT (which only blocks deleting a referenced
+// *parent*) does nothing for it, and no trigger can tell REPLACE's delete
+// apart from a real one. These tests say that honestly instead of
+// asserting a rejection the database does not actually produce: they prove
+// REPLACE still succeeds and clobbers protected data here, which is
+// exactly why AGENTS.md bans the statement outright and
+// scripts/verify-no-replace.mjs enforces the ban in `pnpm check` — see
+// packages/web/src/verify-no-replace-gate.test.ts for that mechanism's own
+// tests. Money quote from the round 2 findings: "No SQL construct on D1
+// can stop `INSERT OR REPLACE INTO line_items` or `INTO golden_set`."
+describe("INSERT OR REPLACE on line_items/golden_set has no DB-level guard — the grep gate is the only defense (review round 2, finding 1)", () => {
+  it("REPLACE on line_items is NOT blocked at the DB layer — it silently overwrites raw_text", async () => {
     await expect(
       DB.prepare(
         `INSERT OR REPLACE INTO line_items (id, receipt_id, raw_text, taxonomy_version) VALUES (?, ?, 'REWRITTEN', '0.1.0')`,
       )
         .bind(lineItemId, receiptId)
         .run(),
-    ).rejects.toThrow();
+    ).resolves.toBeDefined();
 
     const row = await DB.prepare(`SELECT raw_text FROM line_items WHERE id = ?`)
       .bind(lineItemId)
       .first<{ raw_text: string }>();
-    expect(row?.raw_text).toBe("ORG BANANAS  1.24 LB @ .79/LB");
+    expect(row?.raw_text).toBe("REWRITTEN");
   });
 
-  it("blocks INSERT OR REPLACE on golden_set and leaves a written split intact", async () => {
+  it("REPLACE on golden_set is NOT blocked at the DB layer — it silently reassigns a written split", async () => {
     const id = crypto.randomUUID();
     await DB.prepare(
       `INSERT INTO golden_set (id, raw_string, verdict, labeler, taxonomy_version, split)
@@ -136,15 +215,21 @@ describe("INSERT OR REPLACE cannot bypass the protected tables (review round 1, 
       )
         .bind(id)
         .run(),
-    ).rejects.toThrow();
+    ).resolves.toBeDefined();
 
     const row = await DB.prepare(`SELECT split FROM golden_set WHERE id = ?`)
       .bind(id)
       .first<{ split: string }>();
-    expect(row?.split).toBe("train");
+    expect(row?.split).toBe("test");
   });
+});
 
-  it("UPDATE OR IGNORE still respects raw_text immutability (lock-in, not a regression target)", async () => {
+// The BEFORE UPDATE immutability triggers were never REPLACE's problem —
+// UPDATE's own conflict-resolution modes and a real ON CONFLICT upsert
+// still go through UPDATE, which the triggers see fine. Unaffected by the
+// REPLACE-guard rework above; kept as lock-ins.
+describe("non-REPLACE conflict resolution still respects raw_text immutability (lock-in)", () => {
+  it("UPDATE OR IGNORE still respects raw_text immutability", async () => {
     // OR IGNORE's conflict resolution applies to constraint violations
     // (NOT NULL, UNIQUE, CHECK, FK) — not to an explicit RAISE(ABORT) from
     // a trigger, so this must still fail loudly, not silently no-op.
@@ -160,7 +245,7 @@ describe("INSERT OR REPLACE cannot bypass the protected tables (review round 1, 
     expect(row?.raw_text).toBe("ORG BANANAS  1.24 LB @ .79/LB");
   });
 
-  it("upsert (ON CONFLICT DO UPDATE) still respects raw_text immutability (lock-in)", async () => {
+  it("upsert (ON CONFLICT DO UPDATE) still respects raw_text immutability", async () => {
     await expect(
       DB.prepare(
         `INSERT INTO line_items (id, receipt_id, raw_text, taxonomy_version) VALUES (?, ?, 'CORRECTED TEXT', '0.1.0')
@@ -176,7 +261,7 @@ describe("INSERT OR REPLACE cannot bypass the protected tables (review round 1, 
     expect(row?.raw_text).toBe("ORG BANANAS  1.24 LB @ .79/LB");
   });
 
-  it("upsert (ON CONFLICT DO UPDATE) still works for a non-protected column (lock-in)", async () => {
+  it("upsert (ON CONFLICT DO UPDATE) still works for a non-protected column", async () => {
     await expect(
       DB.prepare(
         `INSERT INTO line_items (id, receipt_id, raw_text, taxonomy_version, normalized_name)
@@ -492,8 +577,13 @@ describe("money is structurally integer cents (review round 1, findings 2 and 3)
 
 // Review round 1, finding 17: no test asserted FK enforcement, cascade
 // behaviour, or the absence of receipts.source_id (this PR's one
-// deliberate departure from the brief's literal text).
-describe("foreign keys are enforced and cascade in D1 (review round 1, finding 17)", () => {
+// deliberate departure from the brief's literal text). Review round 2,
+// finding 3 changed receipt_sources' and line_items' FKs from CASCADE to
+// RESTRICT (see migration header) — this block's old "cascades a sources
+// delete" test asserted the behaviour that finding exists to remove, so it
+// is rewritten below to assert RESTRICT instead of CASCADE, alongside new
+// coverage for the other two FKs that changed the same way.
+describe("foreign keys are enforced in D1 (review round 1, finding 17; review round 2, finding 3)", () => {
   it("rejects a line_items insert referencing a non-existent receipt", async () => {
     await expect(
       DB.prepare(
@@ -504,18 +594,63 @@ describe("foreign keys are enforced and cascade in D1 (review round 1, finding 1
     ).rejects.toThrow();
   });
 
-  it("cascades a sources delete to its receipt_sources rows", async () => {
+  it("restricts (does not cascade) a sources delete when a receipt_sources row still references it", async () => {
     const receiptSourceId = crypto.randomUUID();
     await DB.prepare(
       `INSERT INTO receipt_sources (id, receipt_id, source_id, external_id) VALUES (?, ?, ?, ?)`,
     )
-      .bind(receiptSourceId, receiptId, sourceId, "gmail-msg-cascade-test")
+      .bind(receiptSourceId, receiptId, sourceId, "gmail-msg-restrict-test")
       .run();
 
-    await DB.prepare(`DELETE FROM sources WHERE id = ?`).bind(sourceId).run();
+    await expect(
+      DB.prepare(`DELETE FROM sources WHERE id = ?`).bind(sourceId).run(),
+    ).rejects.toThrow();
 
     const row = await DB.prepare(`SELECT id FROM receipt_sources WHERE id = ?`)
       .bind(receiptSourceId)
+      .first();
+    expect(row).not.toBeNull();
+  });
+
+  it("restricts (does not cascade) a receipts delete when a line_items row still references it", async () => {
+    await expect(
+      DB.prepare(`DELETE FROM receipts WHERE id = ?`).bind(receiptId).run(),
+    ).rejects.toThrow();
+
+    const row = await DB.prepare(`SELECT id FROM line_items WHERE id = ?`).bind(lineItemId).first();
+    expect(row).not.toBeNull();
+  });
+
+  it("restricts (does not cascade) a receipts delete when a receipt_sources row still references it", async () => {
+    const receiptSourceId = crypto.randomUUID();
+    await DB.prepare(
+      `INSERT INTO receipt_sources (id, receipt_id, source_id, external_id) VALUES (?, ?, ?, ?)`,
+    )
+      .bind(receiptSourceId, receiptId, sourceId, "gmail-msg-restrict-receipt-test")
+      .run();
+
+    await expect(
+      DB.prepare(`DELETE FROM receipts WHERE id = ?`).bind(receiptId).run(),
+    ).rejects.toThrow();
+
+    const row = await DB.prepare(`SELECT id FROM receipt_sources WHERE id = ?`)
+      .bind(receiptSourceId)
+      .first();
+    expect(row).not.toBeNull();
+  });
+
+  it("a receipt with no children can still be deleted directly (RESTRICT is not a blanket ban, lock-in)", async () => {
+    const emptyReceiptId = crypto.randomUUID();
+    await DB.prepare(`INSERT INTO receipts (id, merchant_raw, total_cents) VALUES (?, ?, ?)`)
+      .bind(emptyReceiptId, "EMPTY RECEIPT", 100)
+      .run();
+
+    await expect(
+      DB.prepare(`DELETE FROM receipts WHERE id = ?`).bind(emptyReceiptId).run(),
+    ).resolves.toBeDefined();
+
+    const row = await DB.prepare(`SELECT id FROM receipts WHERE id = ?`)
+      .bind(emptyReceiptId)
       .first();
     expect(row).toBeNull();
   });
