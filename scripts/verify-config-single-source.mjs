@@ -56,6 +56,9 @@ const CORE_ONLY_EXPORTS = new Set([
   "CHECKSUM_TOLERANCE_MIN_CENTS",
   "CHECKSUM_TOLERANCE_PERCENT",
   "DEDUPE_DATE_WINDOW_DAYS",
+  // STON-2 tracer bullet: fixed guards, not env-tunable levers.
+  "RECEIPT_UPLOAD_MAX_BYTES",
+  "EXTRACTION_SCHEMA_VERSION",
 ]);
 
 let failed = false;
