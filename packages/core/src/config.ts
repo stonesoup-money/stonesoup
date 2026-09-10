@@ -64,3 +64,22 @@ export const GOLDEN_SET_CONTRIBUTION_DEFAULT = "on";
  * packages/core/src/dedupe.ts.
  */
 export const DEDUPE_DATE_WINDOW_DAYS = 1;
+
+/**
+ * Deployment mode and operator identity for the public legal pages
+ * (STON-13). `DEPLOYMENT_MODE_DEFAULT` is what an open-artifact checkout
+ * ships with — a self-hosted instance needs no operator identity at all,
+ * so its rendered privacy policy and ToS say exactly that and never read
+ * `OPERATOR_NAME_DEFAULT` / `OPERATOR_CONTACT_DEFAULT`. Those two exist
+ * for `DEPLOYMENT_MODE = "hosted"` only, and their default value is a
+ * deliberately unmissable placeholder, not a guess: the legal entity
+ * name and contact address for a hosted fleet are facts only a human
+ * has, and inventing them would be fabricating a legal document. See
+ * packages/core/src/legal/context.ts, which re-exports these under the
+ * names the document templates import, and docs/privacy-claims.md.
+ */
+export const DEPLOYMENT_MODE_DEFAULT = "self-hosted";
+export const OPERATOR_NAME_DEFAULT =
+  "[[LEGAL_ENTITY — a human must fill this in before this instance serves a hosted user — see docs/privacy-claims.md]]";
+export const OPERATOR_CONTACT_DEFAULT =
+  "[[CONTACT_ADDRESS — a human must fill this in before this instance serves a hosted user — see docs/privacy-claims.md]]";

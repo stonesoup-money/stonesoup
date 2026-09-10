@@ -1,0 +1,142 @@
+/*
+ * Layout for the Worker-rendered public pages (/privacy, /terms,
+ * /data-promise — packages/worker/src/public/pages.ts) only. Not
+ * imported by the SPA build; the SPA gets its own design-language pass
+ * in STON-2's Tailwind theme, which `@import`s tokens.css but has no
+ * reason to import this file's page-shell rules. Served the same way as
+ * tokens.css: Vite copies `public/` verbatim to `dist/`, so ASSETS
+ * serves it at `/legal.css` with no build step.
+ *
+ * Every color, font, and rule value below is a `var(--…)` from
+ * tokens.css — no inline hex, no literal pixel color (AGENTS.md, Design
+ * language). This file is loaded via <link>, not an inline <style>
+ * block, because the public pages' CSP is `style-src 'self'` with no
+ * `unsafe-inline` — an inline block would be silently blocked by a
+ * CSP-enforcing browser.
+ */
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--color-paper);
+  color: var(--color-ink);
+  font-family: var(--font-display);
+  line-height: 1.55;
+}
+
+.legal-header {
+  padding: 1.25rem 1.25rem 1rem;
+  border-bottom: var(--rule-hairline);
+}
+
+.legal-wordmark {
+  font-family: var(--font-display);
+  font-weight: 700;
+  font-size: 1.1rem;
+  color: var(--color-ink);
+  text-decoration: none;
+}
+
+.legal-main {
+  max-width: 42rem;
+  margin: 0 auto;
+  padding: 1.5rem 1.25rem 3rem;
+  /* The one bold structural device: a red vertical margin rule
+   * (AGENTS.md, "one red vertical margin rule as the attention
+   * device"), used here as the reading column's own margin, not as
+   * decoration on every element. */
+  border-left: var(--rule-margin);
+}
+
+.legal-main h1,
+.legal-main h2,
+.legal-main h3 {
+  font-family: var(--font-display);
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.legal-main h1 {
+  font-size: 1.75rem;
+  margin: 0 0 1.25rem;
+}
+
+.legal-main h2 {
+  font-size: 1.2rem;
+  margin: 2rem 0 0.75rem;
+  padding-top: 1rem;
+  border-top: var(--rule-hairline);
+}
+
+.legal-main h3 {
+  font-size: 1rem;
+  margin: 1.5rem 0 0.5rem;
+}
+
+.legal-main p {
+  margin: 0 0 1rem;
+  color: var(--color-ink);
+}
+
+.legal-main ul {
+  margin: 0 0 1rem;
+  padding-left: 1.25rem;
+}
+
+.legal-main li {
+  margin: 0 0 0.4rem;
+}
+
+.legal-main a {
+  color: var(--color-ledger-red);
+}
+
+.legal-main code {
+  font-family: var(--font-mono);
+  font-size: 0.9em;
+  color: var(--color-thermal-grey);
+}
+
+.legal-main hr {
+  border: none;
+  border-top: var(--rule-hairline);
+  margin: 2rem 0;
+}
+
+.legal-footer {
+  max-width: 42rem;
+  margin: 0 auto;
+  padding: 1.5rem 1.25rem 2.5rem;
+  border-top: var(--rule-hairline);
+}
+
+.legal-footer nav {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  font-family: var(--font-mono);
+  font-size: 0.85rem;
+}
+
+.legal-footer nav a {
+  color: var(--color-thermal-grey);
+  text-decoration: none;
+}
+
+.legal-footer nav a:hover,
+.legal-footer nav a:focus-visible {
+  color: var(--color-ledger-red);
+  text-decoration: underline;
+}
+
+/* Mobile-first (AGENTS.md): the base rules above already read fine at
+ * 375px; this widens the reading column and lightens the margin rule's
+ * visual weight once there's room to spare. */
+@media (min-width: 640px) {
+  .legal-main {
+    padding-left: 2rem;
+  }
+}

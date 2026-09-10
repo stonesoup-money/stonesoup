@@ -177,11 +177,18 @@ here gets its why.
   the `golden_set` row to begin with. *Identity* (`labeler`) is the
   opposite: it **is written and kept locally on purpose**, a real
   internal identifier used for quality control, and is pseudonymized
-  only at **export**. `labeler` looks like a user id, which makes
-  nulling it at write time feel like it satisfies the context rule
-  above — it doesn't; that rule is about context, not about
-  `labeler`, and nulling `labeler` early is a bug, not a fix
-  (STON-16).
+  at the **instance boundary, at submission** — not at dataset
+  export (resolved 2026-09-10, decisions.md, "when is `labeler`
+  pseudonymized?": the raw value must never sit in the central
+  submission pot at all, which "pseudonymized at export" would have
+  allowed). `labeler` looks like a user id, which makes nulling it at
+  write time feel like it satisfies the context rule above — it
+  doesn't; that rule is about context, not about `labeler`, and
+  nulling `labeler` early is a bug, not a fix (STON-16). The same
+  resolution excludes `golden_set.created_at` from the submission
+  payload too (or coarsens it to a date) — a per-label timestamp next
+  to a per-labeler pseudonym is a re-identification handle in a
+  CC0-published dataset.
 - `split` is assigned once and never changed. The held-out test set is
   never used for prompt tuning.
 - The client-side filter runs **before** submission — pharmacy-pattern
@@ -208,12 +215,15 @@ warm-startup styling.
 
 - Palette: paper `#FCFCF9` · ink `#1A1A17` · ledger-rule blue
   `#B9CCDD` · ledger red `#B3392E` · stamp green `#3E6B4F` · thermal
-  grey `#6E6E66`. These six hexes are canonical **today** — there is
-  no token stylesheet yet. Once one lands (STON-2), *it* becomes
-  canonical and this file quotes it instead of restating the values,
-  so there is one copy to keep current. Until then, this list is
-  exempt from the "no inline hex in a component" rule below; nowhere
-  else in the codebase is.
+  grey `#6E6E66`. **`packages/web/public/tokens.css` is now canonical**
+  (STON-13) — plain CSS custom properties, no Tailwind, no shadcn, so
+  the server-rendered public pages can use it with no build step. This
+  list is the same six values, quoted here for readability, not a
+  second source of truth; STON-2's Tailwind v4 `@theme` block imports
+  `tokens.css` rather than restating them. Dark-mode overrides for all
+  six live in the same file under `prefers-color-scheme: dark` — the
+  brief states only the light values, so the dark palette is a STON-13
+  derivation, not a brief quote.
 - **Mobile-first, PWA-installable review inbox.** The review UI is
   designed for phone-in-hand first, desktop second — not built
   desktop-first and shrunk. No native app in v1.
@@ -338,6 +348,71 @@ warm-startup styling.
 - No third-party OCR services. The vision model does the whole
   receipt in one call.
 
+## Public pages and the privacy policy
+
+- `/privacy`, `/terms`, and `/data-promise` are server-rendered by the
+  Worker (`packages/worker/src/public/pages.ts`), not the SPA — real
+  HTML in the first byte, no JS, no auth. They must stay listed verbatim
+  in `wrangler.jsonc`'s `assets.run_worker_first`, or
+  `not_found_handling: "single-page-application"` silently serves the
+  SPA shell at those paths instead — the failure mode that would take
+  the OAuth-consent-screen launch blocker down with no visible error.
+  `scripts/verify-public-routes.mjs`, wired into `pnpm check`, is what
+  actually guards this; do not rely on the `SELF.fetch` test suite alone
+  to prove it (the Workers Vitest pool may not simulate
+  `run_worker_first` faithfully).
+- These three routes are **deliberately unauthenticated** and must
+  never sit behind session middleware — Google's OAuth consent screen
+  (and a self-hoster's own, registering their own Google app) fetches
+  the privacy policy URL with no login. STON-4 (auth) must exclude
+  `/privacy`, `/terms`, and `/data-promise` from whatever session
+  middleware it adds.
+- **Any ticket that changes what data is collected, retained, or
+  transmitted must update the relevant document**
+  (`packages/core/src/legal/privacy.ts` / `terms.ts` / `data-promise.ts`)
+  and `docs/privacy-claims.md` in the same PR — see review invariant
+  #24 below. Writing code that changes behaviour the policy describes,
+  without updating the policy, is not a follow-up task; it is the same
+  change, incomplete.
+- **Every claim on those three pages has a row in
+  `docs/privacy-claims.md`, and every rendered block has a line in
+  `docs/legal-claim-ledger.md` naming that row.** A claim the table marks
+  `required` in its Marker column should carry the
+  `*(design — not yet built; see docs/privacy-claims.md)*` marker in the
+  prose itself, not only in the table. The rule for deciding is
+  *restrictive* vs. *affirmative existence*: "only allowlisted mail is
+  fetched" is true while nothing runs and needs no marker; "this instance
+  sets one cookie" is false while nothing runs and always needs one. Edit
+  the prose, regenerate `docs/*.md`, and `pnpm check` will tell you which
+  blocks have no ledger entry at all
+  (`packages/web/src/legal-claim-coverage.test.ts`) — but that test only
+  checks the ledger's own mechanical integrity (it parses, keys are
+  unique, no stale or missing entries), not whether the row named is the
+  *right* row. Three review rounds of spot fixes went 4 major → 3 major
+  → 5 major before the ledger existed, and a fourth round showed the
+  ledger's own ceiling: a fabricated claim pointed at a real, unrelated
+  row passed every mechanical check, because no test can compare prose to
+  an implementation. **`.github/CODEOWNERS` is the actual claim-truth
+  gate** — it requires the repo owner's review of
+  `packages/core/src/legal/**` and the generated `docs/privacy*.md`,
+  `docs/terms*.md`, `docs/data-promise*.md`, `docs/privacy-claims.md`,
+  and `docs/legal-claim-ledger.md`. That line only enforces anything once
+  "Require review from Code Owners" is turned on in this repo's branch
+  protection — a GitHub setting, not something this file or any test can
+  flip.
+- The document text is conditioned on `DEPLOYMENT_MODE`
+  (`"self-hosted"` | `"hosted"`, `wrangler.jsonc` var): a self-hosted
+  instance needs no legal entity and no jurisdiction and says exactly
+  that; the hosted fleet's `OPERATOR_NAME` / `OPERATOR_CONTACT` vars,
+  plus the inline jurisdiction/effective-date placeholders in
+  `packages/core/src/legal/context.ts`, must never be
+  filled in with an invented value — an agent inventing a legal entity
+  name or jurisdiction is fabricating a legal document. Leave the
+  `[[...]]` placeholder in place; a human fills it in.
+- **The dataset publication pipeline stays gated** (see Human gates
+  below). `docs/dataset-publication.md` is its only deliverable in this
+  repository — prose, not code.
+
 ## Human gates
 
 - STON-14 (control plane, private repo): plan only. No code, no
@@ -401,7 +476,9 @@ wins.
    boundary, the `golden_set` and two-boundaries bullets. Trigger: a
    golden-set write or submission carrying context (image reference,
    receipt id, user id, store, purchase timestamp); also stripping or
-   nulling `labeler` at write time instead of export.
+   nulling `labeler` at write time instead of at the instance boundary
+   (submission); also a submission payload that includes the real
+   `labeler` or an uncoarsened `created_at`.
 4. **Sensitive strings never leave the machine** — Privacy and the
    anonymization boundary, the client-side filter bullet. Trigger: a
    submission path that bypasses the filter, or a filter change that
@@ -491,3 +568,15 @@ wins.
     an `ON DELETE RESTRICT` added for this without a stated reason; or
     `scripts/verify-no-replace.mjs` being dropped from `pnpm check` or
     having its scanned roots narrowed back to `packages/**` alone.
+24. **A behaviour change that outruns the privacy policy is a major
+    finding** — Public pages and the privacy policy, above. Trigger: a
+    change to what data is collected, retained, or transmitted (Gmail
+    scope, golden-set fields, retention, third parties, deletion) landing
+    without a matching update to `packages/core/src/legal/privacy.ts` /
+    `terms.ts` / `data-promise.ts` and `docs/privacy-claims.md` in the
+    same PR; a hosted-mode legal placeholder (`OPERATOR_NAME`,
+    `OPERATOR_CONTACT`, jurisdiction, or effective date, in
+    `packages/core/src/legal/context.ts`) filled in with an invented
+    value instead of left as `[[...]]`; `/privacy`, `/terms`, or
+    `/data-promise` moved behind auth or dropped from `wrangler.jsonc`'s
+    `assets.run_worker_first`.

@@ -15,7 +15,23 @@
     // `not_found_handling: "single-page-application"` alone would swallow
     // /api/* into index.html and the Worker would never run. This explicit
     // route list is what lets SPA deep links and the API coexist.
-    "run_worker_first": ["/api/*", "/mcp", "/mcp/*", "/auth/*", "/.well-known/*"]
+    // STON-13: /privacy, /terms, /data-promise must reach the Worker, not
+    // the SPA's index.html — the wrangler assets config makes any path not
+    // listed here resolve to the SPA shell, which would make Google's
+    // consent-screen fetch of the privacy policy silently return the app
+    // shell instead of the policy. scripts/verify-public-routes.mjs fails
+    // `pnpm check` if this list and packages/core/src/legal/documents.ts
+    // (PUBLIC_ROUTE_PATHS) ever disagree.
+    "run_worker_first": [
+      "/api/*",
+      "/mcp",
+      "/mcp/*",
+      "/auth/*",
+      "/.well-known/*",
+      "/privacy",
+      "/terms",
+      "/data-promise"
+    ]
   },
 
   "d1_databases": [
@@ -55,6 +71,17 @@
     "DAILY_REVIEW_CAP": "200",
     "REVIEW_QUEUE_CAP": "100",
     "REVIEW_QUEUE_REFILL_AT": "20",
-    "GOLDEN_SET_CONTRIBUTION": "on"
+    "GOLDEN_SET_CONTRIBUTION": "on",
+    // STON-13: which legal-document text the public pages render. An
+    // open-artifact checkout defaults to "self-hosted" — no operator
+    // identity, no jurisdiction, because none exists by default. The
+    // hosted fleet's deploy sets this to "hosted" and must also set
+    // OPERATOR_NAME / OPERATOR_CONTACT to their real values before the
+    // service is presentable to a real user; left unset, the rendered
+    // pages show an unmissable placeholder rather than a fabricated fact
+    // (see packages/core/src/legal/context.ts, docs/privacy-claims.md).
+    "DEPLOYMENT_MODE": "self-hosted",
+    "OPERATOR_NAME": "[[LEGAL_ENTITY — a human must fill this in before this instance serves a hosted user — see docs/privacy-claims.md]]",
+    "OPERATOR_CONTACT": "[[CONTACT_ADDRESS — a human must fill this in before this instance serves a hosted user — see docs/privacy-claims.md]]"
   }
 }

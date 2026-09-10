@@ -1,0 +1,17 @@
+# The claim-truth gate for the public legal pages (STON-13 final pass;
+# decisions.md). No test can verify that this prose matches the
+# implementation — that is a judgment call, not a mechanical fact — so a
+# human reviews it instead. See packages/web/src/legal-claim-coverage.test.ts
+# and docs/legal-claim-ledger.md for what the mechanical checks do and do
+# not prove.
+#
+# This file only enforces anything once "Require review from Code Owners"
+# is turned on for this repo in Settings -> Branches -> Branch protection
+# rules. That is a GitHub setting only the repo owner can flip; until it
+# is on, this file is advisory, not a merge gate.
+packages/core/src/legal/**    @mattwalters
+docs/privacy*.md               @mattwalters
+docs/terms*.md                 @mattwalters
+docs/data-promise*.md          @mattwalters
+docs/privacy-claims.md         @mattwalters
+docs/legal-claim-ledger.md     @mattwalters
