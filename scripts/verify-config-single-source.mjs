@@ -48,7 +48,11 @@ const PAIRS = [
 // PAIRS is an unpaired export this script cannot see, which is exactly
 // review round 2, finding 6's complaint — so it fails instead of passing
 // silently.
-const CORE_ONLY_EXPORTS = new Set(["CHECKSUM_TOLERANCE_MIN_CENTS", "CHECKSUM_TOLERANCE_PERCENT"]);
+const CORE_ONLY_EXPORTS = new Set([
+  "CHECKSUM_TOLERANCE_MIN_CENTS",
+  "CHECKSUM_TOLERANCE_PERCENT",
+  "DEDUPE_DATE_WINDOW_DAYS",
+]);
 
 let failed = false;
 

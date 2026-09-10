@@ -51,3 +51,16 @@ export const REVIEW_QUEUE_REFILL_AT = 20;
  * defaults"): hosted free tier ships this "on" and required by ToS;
  * self-host ships "on" too, clearly disclosed, opt-out honest. "on" | "off". */
 export const GOLDEN_SET_CONTRIBUTION_DEFAULT = "on";
+
+/**
+ * Dedupe (STON-11): when comparing two receipts' printed purchase day and
+ * the two sides use different `purchased_at` shapes (one date-only, one
+ * full timestamp), the exact-day comparison widens by this many days on
+ * each side instead — a `...Z` instant's true local calendar day is
+ * unknown within a day, so exact-day comparison alone would silently miss
+ * a same-purchase pair straddling a UTC midnight. Same-shape comparisons
+ * never widen. Not a wrangler.jsonc var (not an env-tunable lever) — see
+ * CORE_ONLY_EXPORTS in scripts/verify-config-single-source.mjs. See
+ * packages/core/src/dedupe.ts.
+ */
+export const DEDUPE_DATE_WINDOW_DAYS = 1;
