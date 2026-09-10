@@ -12,7 +12,9 @@
     "lint": "biome ci .",
     "build": "pnpm -F @stonesoup/web build",
     "test": "pnpm build && vitest run",
-    "check": "pnpm typecheck && pnpm lint && pnpm test",
+    "check:types": "node scripts/verify-types-reproducible.mjs",
+    "check:config": "node scripts/verify-config-single-source.mjs",
+    "check": "pnpm typecheck && pnpm lint && pnpm test && pnpm check:types && pnpm check:config",
     "format": "biome check --write .",
     "gen:types": "wrangler types",
     "deploy": "pnpm build && wrangler d1 migrations apply stonesoup --remote && wrangler deploy"

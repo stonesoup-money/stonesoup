@@ -40,7 +40,7 @@ export default defineConfig({
         test: {
           name: "web",
           environment: "happy-dom",
-          include: ["packages/web/**/*.test.tsx"],
+          include: ["packages/web/**/*.test.{ts,tsx}"],
           setupFiles: ["./test/setup-web.ts"],
         },
         plugins: [react()],

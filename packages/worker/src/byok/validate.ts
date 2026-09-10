@@ -16,6 +16,13 @@ import Anthropic from "@anthropic-ai/sdk";
  *    key on an org with no credit). Opt-in via `runTestMessage`: run once at
  *    onboarding only, never on a routine health poll.
  *
+ * A dropped connection is its own `network` stage at both call sites
+ * (review round 1, finding 12) — distinguished from `auth`/`model` at
+ * stage 2 and from a genuine extraction failure (e.g. no credit) at stage
+ * 3, so `GET /api/byok/status` returns a normal `{ok:false}` status for a
+ * transient connectivity blip instead of 500ing, and the stage 3 message
+ * doesn't blame "a live extraction call failed" on the network.
+ *
  * The Anthropic client sits behind this module as the seam STON-5 builds
  * its extraction client against; tests here stub `fetch`, so this makes no
  * live network calls in CI.
@@ -23,7 +30,7 @@ import Anthropic from "@anthropic-ai/sdk";
 
 const KEY_PREFIX = "sk-ant-";
 
-export type ByokStage = "format" | "auth" | "model" | "message" | "ok";
+export type ByokStage = "format" | "auth" | "model" | "network" | "message" | "ok";
 
 export interface ByokStatus {
   ok: boolean;
@@ -73,6 +80,13 @@ export async function validateAnthropicKey(
         message: `ANTHROPIC_MODEL "${env.ANTHROPIC_MODEL}" is not a valid or accessible model for this key.`,
       };
     }
+    if (error instanceof Anthropic.APIConnectionError) {
+      return {
+        ok: false,
+        stage: "network",
+        message: "Could not reach Anthropic to verify the key — check connectivity and try again.",
+      };
+    }
     throw error;
   }
 
@@ -87,7 +101,16 @@ export async function validateAnthropicKey(
       output_config: { effort: "low" },
       messages: [{ role: "user", content: "ping" }],
     });
-  } catch {
+  } catch (error) {
+    if (error instanceof Anthropic.APIConnectionError) {
+      return {
+        ok: false,
+        stage: "network",
+        model: model.id,
+        message:
+          "Key and model are valid, but the test message couldn't reach Anthropic — check connectivity and try again.",
+      };
+    }
     return {
       ok: false,
       stage: "message",

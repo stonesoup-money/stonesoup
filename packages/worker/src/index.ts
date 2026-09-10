@@ -1,3 +1,4 @@
+import { DEFAULT_EXTRACTION_MODEL } from "@stonesoup/core";
 import { Hono } from "hono";
 import { validateAnthropicKey } from "./byok/validate.js";
 
@@ -14,8 +15,17 @@ app.get("/api/health", (c) => c.json({ ok: true }));
 
 // BYOK status — format + model checks only (no live extraction call) on a
 // routine poll. Onboarding wires a `runTestMessage` call in STON-5.
+//
+// ANTHROPIC_MODEL falls back to @stonesoup/core's DEFAULT_EXTRACTION_MODEL
+// rather than assuming wrangler.jsonc's `vars` always supplies it — the
+// single named export is the source of truth (AGENTS.md, "Config values,
+// not hardcodes"; review round 1, finding 13), not an assumption that a
+// deploy's env always sets it.
 app.get("/api/byok/status", async (c) => {
-  const status = await validateAnthropicKey(c.env);
+  const status = await validateAnthropicKey({
+    ANTHROPIC_API_KEY: c.env.ANTHROPIC_API_KEY,
+    ANTHROPIC_MODEL: c.env.ANTHROPIC_MODEL || DEFAULT_EXTRACTION_MODEL,
+  });
   return c.json(status);
 });
 

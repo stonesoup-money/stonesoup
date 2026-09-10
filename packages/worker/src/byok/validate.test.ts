@@ -132,4 +132,50 @@ describe("validateAnthropicKey", () => {
     expect(status).toMatchObject({ ok: true, stage: "message", model: MODEL });
     expect(fetchSpy).toHaveBeenCalledTimes(2);
   });
+
+  // Review round 1, finding 12: a dropped connection is not the same
+  // failure as a bad key or a no-credit account, and callers (GET
+  // /api/byok/status in particular) need to tell them apart instead of
+  // 500ing or reporting "a live extraction call failed" for both.
+  it("reports the network stage, not auth or model, when the connection drops at stage 2", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new TypeError("fetch failed");
+      }),
+    );
+
+    const status = await validateAnthropicKey({
+      ANTHROPIC_API_KEY: "sk-ant-good",
+      ANTHROPIC_MODEL: MODEL,
+    });
+
+    expect(status).toMatchObject({ ok: false, stage: "network" });
+  });
+
+  it("reports the network stage, not message, when the connection drops during the test message call", async () => {
+    const fetchSpy = vi.fn(async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.includes("/v1/models/")) {
+        return jsonResponse(200, {
+          id: MODEL,
+          type: "model",
+          display_name: "Claude Opus 5",
+          created_at: "2026-01-01T00:00:00Z",
+        });
+      }
+      if (url.includes("/v1/messages")) {
+        throw new TypeError("fetch failed");
+      }
+      throw new Error(`unexpected fetch: ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchSpy);
+
+    const status = await validateAnthropicKey(
+      { ANTHROPIC_API_KEY: "sk-ant-good", ANTHROPIC_MODEL: MODEL },
+      { runTestMessage: true },
+    );
+
+    expect(status).toMatchObject({ ok: false, stage: "network", model: MODEL });
+  });
 });

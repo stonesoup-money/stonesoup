@@ -4,5 +4,10 @@
     "lib": ["ES2022"],
     "types": ["@cloudflare/workers-types", "@cloudflare/vitest-plugin/types"]
   },
-  "include": ["src", "../../worker-configuration.d.ts"]
+  "include": [
+    "src",
+    "../../worker-configuration.d.ts",
+    "../../vitest.config.ts",
+    "../../test/apply-migrations.ts"
+  ]
 }
