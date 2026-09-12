@@ -11,6 +11,8 @@
     "typecheck": "pnpm -r typecheck",
     "lint": "biome ci .",
     "build": "pnpm -F @stonesoup/web build",
+    "dev": "pnpm build && wrangler dev",
+    "dev:lan": "pnpm build && wrangler dev --ip 0.0.0.0",
     "test": "pnpm build && vitest run",
     "check:types": "node scripts/verify-types-reproducible.mjs",
     "check:config": "node scripts/verify-config-single-source.mjs",
