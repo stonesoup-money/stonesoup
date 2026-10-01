@@ -426,36 +426,56 @@ warm-startup styling.
   agent, and the human sample review before a release is permanent,
   not a v1 gate.
 
-## Dispatch
+## Orchestrate
 
-The per-repo configuration the `dispatch`, `implement-ticket`,
-`adversarial-review`, and `merge-queue` skills read. Those skills are
-maintained once outside this repo and are repo-generic; this section
-is how this repo opts into them. A field left unfilled is not a
-default — the skills are required to stop and say which one is
-missing rather than guess.
+The `factory` pipeline — `orchestrate`, `implement-ticket`,
+`adversarial-review`, `merge-queue`, `decision-queue` — reads this
+section for its repo-specific configuration.
 
 - **Linear team key**: `STON` (ticket ids are `STON-<n>`).
-- **Check command**: `pnpm check` — typecheck (TypeScript,
-  `strict: true`) + lint + test (Biome for lint/format, Vitest with
-  `@cloudflare/vitest-plugin` for tests). Must pass locally before any
-  push, by an implementer, a fixer, or a human. **It does not exist
-  yet**: it lands with the toolchain in STON-3, and until that merges
-  there is nothing to run — this file declares the contract, STON-3
-  implements it. CI must run this same command rather than
-  enumerating its own steps, so that a tree passing `pnpm check`
-  locally passes CI.
+- **Check command**: `./scripts/check.sh`. It runs a frozen
+  `pnpm install` and then `pnpm check`, the same two steps CI runs:
+  typecheck, lint, tests, and the `scripts/verify-*.mjs` gates,
+  `verify-no-replace.mjs` included. It needs no Cloudflare credentials.
+  An implementer or fixer runs it and passes it before pushing.
 - **Base branch**: `main`.
-- **Worktrees**: `.claude/worktrees/` — one worktree per ticket, named
-  for the ticket. Gitignored via `.gitignore` at the repo root.
-- **Run manifest**: `.claude/worktrees/dispatch-manifest.md`.
+- **Worktrees**: `$HOME/ops/worktrees/stonesoup-money/stonesoup/` —
+  outside any repo. Expand `$HOME` to an absolute path before using it.
+- **Review invariants**: `### Review invariants` below, which points
+  into House rules, Data conventions, Taxonomy, and Privacy and the
+  anonymization boundary (among others). Those sections are not
+  restated here.
+- **Stop-list**: below.
+- **Write window**: `none`.
+
+**Getting the pipeline.** Install `factory` once per machine at user
+scope (`claude plugin marketplace add mattwalters/skills`, then
+`claude plugin install factory@mattwalters --scope user`).
+`.claude/settings.json` declares the `mattwalters` marketplace so Claude
+Code knows where it lives, and deliberately does not enable the plugin:
+a project pin registers a separate install per checkout and worktree,
+and those drift from the user-scope version.
+
+**Stop-list.** A change touching any of these waits for a human to
+merge, whatever mode the run is in:
+
+- D1 schema migrations: `migrations/`.
+- Golden-set write paths and the anonymization boundary: the
+  client-side filter, `labeler` pseudonymization, and the submission
+  payload.
+- Deploy configuration and secret bindings: `wrangler.jsonc`.
+- Taxonomy slugs and versions.
+- `LICENSE` and AGPL headers.
+- CI config: `.github/workflows/`.
+- This `## Orchestrate` section, `scripts/check.sh`, and
+  `.claude/settings.json`.
 
 Statuses are Linear's stock ones — `Todo` → `In Progress` →
 `In Review` → `Done` — with two workspace labels doing the rest:
 `approved-to-merge` on a ticket in `In Review` means a human has
 approved its merge and it is in the merge queue; `needs-attention`
 means it needs a human and keeps whatever status it already had.
-`Backlog` is off-limits to dispatch: promoting a ticket to `Todo` is
+`Backlog` is off-limits to orchestrate: promoting a ticket to `Todo` is
 the only signal that it is available to work.
 
 ### Review invariants
